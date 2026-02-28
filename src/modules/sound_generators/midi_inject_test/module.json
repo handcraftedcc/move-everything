@@ -1,0 +1,69 @@
+{
+  "id": "midi_inject_test",
+  "name": "MIDI Inject Test",
+  "abbrev": "M2M",
+  "version": "0.2.0",
+  "description": "Hold-gated internal MIDI injector test (8x1, 8x2, 8x3 semitone stacks)",
+  "dsp": "dsp.so",
+  "api_version": 2,
+  "standalone": false,
+  "capabilities": {
+    "audio_out": true,
+    "midi_in": true,
+    "chainable": true,
+    "component_type": "sound_generator",
+    "ui_hierarchy": {
+      "levels": {
+        "root": {
+          "name": "MIDI Inject Test",
+          "params": [
+            {
+              "key": "out_channel",
+              "name": "Output Ch",
+              "type": "int",
+              "min": 0,
+              "max": 16,
+              "default": 0,
+              "step": 1
+            },
+            {
+              "key": "bpm",
+              "name": "BPM",
+              "type": "int",
+              "min": 30,
+              "max": 300,
+              "default": 120,
+              "step": 1
+            },
+            {
+              "key": "velocity",
+              "name": "Velocity",
+              "type": "int",
+              "min": 1,
+              "max": 127,
+              "default": 100,
+              "step": 1
+            },
+            {
+              "key": "gate_percent",
+              "name": "Gate %",
+              "type": "int",
+              "min": 5,
+              "max": 95,
+              "default": 50,
+              "step": 1
+            },
+            {
+              "key": "source_mode",
+              "name": "Input Src",
+              "type": "enum",
+              "options": ["both", "internal", "external"],
+              "default": 0
+            }
+          ],
+          "knobs": ["out_channel", "bpm", "velocity", "gate_percent"]
+        }
+      }
+    }
+  }
+}

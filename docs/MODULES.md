@@ -701,8 +701,19 @@ For native code, shared headers are in `src/host/`:
 |------|----------|
 | `js_display.h/c` | Display primitives (set_pixel, draw_rect, print), font loading, QuickJS bindings |
 | `shadow_constants.h` | Shadow mode shared memory names, buffer sizes, control structures |
+| `shadow_midi_to_move.h/c` | Non-blocking helper API for injecting module-generated USB-MIDI into Move as external cable 2 input |
+| `shadow_midi_to_move_shm.h` | Shared-memory layout/constants for `/shadow_midi_to_move` ring buffer |
 | `plugin_api_v1.h` | DSP plugin interface |
 | `audio_fx_api_v2.h` | Audio effects plugin interface |
+
+Example module-side MIDI injection:
+
+```c
+#include "host/shadow_midi_to_move.h"
+
+shadow_midi_to_move_note_on(3, 60, 100);
+shadow_midi_to_move_cc(3, 74, 64);
+```
 
 ## Example Modules
 

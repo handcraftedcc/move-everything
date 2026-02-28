@@ -426,6 +426,7 @@ Shadow Mode uses several shared memory regions for IPC:
 | `/shadow_display` | Display buffer for overlay rendering |
 | `/shadow_ui_state` | Slot state (names, channels, active status) |
 | `/shadow_param` | Parameter read/write requests |
+| `/shadow_midi_to_move` | Ring buffer of module-generated USB-MIDI packets injected into Move MIDI_IN as cable 2 |
 
 ### MIDI Cables
 
@@ -435,6 +436,7 @@ Move uses USB-MIDI cable numbers to separate different MIDI streams:
 |-------|-----------|---------|
 | 0 | In | Move hardware controls (pads, knobs, buttons) |
 | 0 | Out | Move UI events (filtered from shadow MIDI output) |
+| 2 | In | External USB MIDI input (and internal module-injected MIDI via `/shadow_midi_to_move`) |
 | 2 | Out | Track MIDI output (routed to shadow synths) |
 | 15 | Both | Special/system messages |
 

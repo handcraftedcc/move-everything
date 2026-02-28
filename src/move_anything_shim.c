@@ -54,6 +54,7 @@
 #include "host/shadow_fd_trace.h"
 #include "host/shadow_state.h"
 #include "host/shadow_midi.h"
+#include "host/shadow_midi_to_move_shm.h"
 
 /* Debug flags - set to 1 to enable various debug logging */
 #define SHADOW_TIMING_LOG 0      /* ioctl/DSP timing logs to /tmp */
@@ -79,6 +80,7 @@ static unsigned char shadow_mailbox[4096] __attribute__((aligned(64))); /* Shado
 #define AUDIO_IN_OFFSET 2304
 
 #define AUDIO_BUFFER_SIZE 512      /* 128 frames * 2 channels * 2 bytes */
+#define SHADOW_MIDI_TO_MOVE_MAX_INJECT_PER_CYCLE 1
 /* Buffer sizes from shadow_constants.h: MIDI_BUFFER_SIZE, DISPLAY_BUFFER_SIZE,
    CONTROL_BUFFER_SIZE, SHADOW_UI_BUFFER_SIZE, SHADOW_PARAM_BUFFER_SIZE */
 /* FRAMES_PER_BLOCK is now defined in shadow_constants.h */
@@ -1403,10 +1405,14 @@ static uint8_t *shadow_midi_shm = NULL;
 static uint8_t *shadow_ui_midi_shm = NULL;
 static uint8_t *shadow_display_shm = NULL;
 static uint8_t *display_live_shm = NULL;
+static shadow_midi_to_move_t *shadow_midi_to_move_shm = NULL;  /* Module->Move MIDI queue */
 static shadow_midi_out_t *shadow_midi_out_shm = NULL;  /* MIDI output from shadow UI */
 static uint8_t last_shadow_midi_out_ready = 0;
 static shadow_midi_dsp_t *shadow_midi_dsp_shm = NULL;  /* MIDI to DSP from shadow UI */
 static uint8_t last_shadow_midi_dsp_ready = 0;
+static uint32_t shadow_midi_to_move_injected_count = 0;
+static uint32_t shadow_midi_to_move_dropped_count = 0;
+static uint32_t shadow_midi_to_move_last_cycle_injected = 0;
 
 static uint32_t last_screenreader_sequence = 0;  /* Track last spoken message */
 static uint64_t last_speech_time_ms = 0;  /* Rate limiting for TTS */
@@ -1426,6 +1432,7 @@ static int shm_midi_out_fd = -1;
 static int shm_midi_dsp_fd = -1;
 static int shm_screenreader_fd = -1;
 static int shm_overlay_fd = -1;
+static int shm_midi_to_move_fd = -1;
 
 /* Shadow initialization state */
 static int shadow_shm_initialized = 0;
@@ -1723,6 +1730,35 @@ static void init_shadow_shm(void)
         printf("Shadow: Failed to create overlay shm\n");
     }
 
+    /* Create/open module->Move MIDI injection queue */
+    {
+        size_t midi_to_move_size =
+            shadow_midi_to_move_shm_size(SHADOW_MIDI_TO_MOVE_DEFAULT_CAPACITY);
+        shm_midi_to_move_fd = shm_open(SHADOW_MIDI_TO_MOVE_SHM_NAME, O_CREAT | O_RDWR, 0666);
+        if (shm_midi_to_move_fd >= 0) {
+            if (ftruncate(shm_midi_to_move_fd, (off_t)midi_to_move_size) == 0) {
+                shadow_midi_to_move_shm = (shadow_midi_to_move_t *)mmap(
+                    NULL, midi_to_move_size, PROT_READ | PROT_WRITE,
+                    MAP_SHARED, shm_midi_to_move_fd, 0);
+                if (shadow_midi_to_move_shm == MAP_FAILED) {
+                    shadow_midi_to_move_shm = NULL;
+                    printf("Shadow: Failed to mmap midi_to_move shm\n");
+                } else {
+                    memset(shadow_midi_to_move_shm, 0, midi_to_move_size);
+                    shadow_midi_to_move_shm->magic = SHADOW_MIDI_TO_MOVE_MAGIC;
+                    shadow_midi_to_move_shm->version = SHADOW_MIDI_TO_MOVE_VERSION;
+                    shadow_midi_to_move_shm->capacity = SHADOW_MIDI_TO_MOVE_DEFAULT_CAPACITY;
+                    __atomic_store_n(&shadow_midi_to_move_shm->write_idx, 0u, __ATOMIC_RELEASE);
+                    __atomic_store_n(&shadow_midi_to_move_shm->read_idx, 0u, __ATOMIC_RELEASE);
+                }
+            } else {
+                printf("Shadow: Failed to size midi_to_move shm\n");
+            }
+        } else {
+            printf("Shadow: Failed to create midi_to_move shm\n");
+        }
+    }
+
     /* TTS engine uses lazy initialization - will init on first speak */
     tts_set_volume(70);  /* Set volume early (safe, doesn't require TTS init) */
     printf("Shadow: TTS engine configured (will init on first use)\n");
@@ -1734,9 +1770,120 @@ static void init_shadow_shm(void)
     memset(shadow_slot_capture, 0, sizeof(shadow_slot_capture));
 
     shadow_shm_initialized = 1;
-    printf("Shadow: Shared memory initialized (audio=%p, midi=%p, ui_midi=%p, display=%p, control=%p, ui=%p, param=%p, midi_out=%p, midi_dsp=%p, screenreader=%p, overlay=%p)\n",
+    printf("Shadow: Shared memory initialized (audio=%p, midi=%p, ui_midi=%p, display=%p, control=%p, ui=%p, param=%p, midi_out=%p, midi_dsp=%p, screenreader=%p, overlay=%p, midi_to_move=%p)\n",
            shadow_audio_shm, shadow_midi_shm, shadow_ui_midi_shm,
-           shadow_display_shm, shadow_control, shadow_ui_state, shadow_param, shadow_midi_out_shm, shadow_midi_dsp_shm, shadow_screenreader_shm, shadow_overlay_shm);
+           shadow_display_shm, shadow_control, shadow_ui_state, shadow_param, shadow_midi_out_shm, shadow_midi_dsp_shm, shadow_screenreader_shm, shadow_overlay_shm, shadow_midi_to_move_shm);
+}
+
+static int shadow_inject_midi_to_move_packet(const uint8_t pkt[4])
+{
+    if (!pkt) return 0;
+    if (!global_mmap_addr) return 0;
+
+    uint8_t *midi_in = global_mmap_addr + MIDI_IN_OFFSET;
+    for (int j = 0; j < MIDI_BUFFER_SIZE; j += 4) {
+        if (__atomic_load_n(&midi_in[j + 0], __ATOMIC_ACQUIRE) != 0) continue;
+
+        /* Publish payload first, then mark slot occupied via byte 0.
+         * Move considers slot[0] != 0 as valid; writing it first can expose
+         * partially-written packets to concurrent mailbox readers. */
+        __atomic_store_n(&midi_in[j + 1], pkt[1], __ATOMIC_RELAXED);
+        __atomic_store_n(&midi_in[j + 2], pkt[2], __ATOMIC_RELAXED);
+        __atomic_store_n(&midi_in[j + 3], pkt[3], __ATOMIC_RELAXED);
+        __atomic_thread_fence(__ATOMIC_RELEASE);
+        __atomic_store_n(&midi_in[j + 0], pkt[0], __ATOMIC_RELEASE);
+        return 1;
+    }    
+
+    return 0;
+}
+
+static int shadow_midi_to_move_packet_valid(const uint8_t pkt[4])
+{
+    uint8_t cin = (uint8_t)(pkt[0] & 0x0Fu);
+    uint8_t status = pkt[1];
+    uint8_t type = (uint8_t)(status & 0xF0u);
+
+    switch (cin) {
+        case 0x08: return type == 0x80;
+        case 0x09: return type == 0x90;
+        case 0x0A: return type == 0xA0;
+        case 0x0B: return type == 0xB0;
+        case 0x0C: return type == 0xC0;
+        case 0x0D: return type == 0xD0;
+        case 0x0E: return type == 0xE0;
+        default: break;
+    }
+
+    return 0;
+}
+
+static void shadow_drain_midi_to_move_queue(void)
+{
+    shadow_midi_to_move_last_cycle_injected = 0;
+
+    if (!shadow_midi_to_move_shm || !global_mmap_addr) return;
+    if (shadow_midi_to_move_shm->magic != SHADOW_MIDI_TO_MOVE_MAGIC ||
+        shadow_midi_to_move_shm->version != SHADOW_MIDI_TO_MOVE_VERSION) {
+        return;
+    }
+
+    uint32_t capacity = shadow_midi_to_move_shm->capacity;
+    if (capacity == 0) return;
+
+    uint32_t read_idx = __atomic_load_n(&shadow_midi_to_move_shm->read_idx, __ATOMIC_ACQUIRE);
+    const uint32_t initial_read_idx = read_idx;
+    uint32_t write_idx = __atomic_load_n(&shadow_midi_to_move_shm->write_idx, __ATOMIC_ACQUIRE);
+
+    uint32_t pending = write_idx - read_idx;
+    if (pending > capacity) {
+        uint32_t overflow = pending - capacity;
+        shadow_midi_to_move_dropped_count += overflow;
+        read_idx += overflow;
+    }
+
+    const uint32_t *packet_words =
+        (const uint32_t *)shadow_midi_to_move_packets_const(shadow_midi_to_move_shm);
+    uint32_t *ready_words = shadow_midi_to_move_ready(shadow_midi_to_move_shm);
+    uint32_t injected = 0;
+
+    while (read_idx != write_idx && injected < SHADOW_MIDI_TO_MOVE_MAX_INJECT_PER_CYCLE) {
+        uint32_t slot = read_idx % capacity;
+        uint32_t ready = __atomic_load_n(&ready_words[slot], __ATOMIC_ACQUIRE);
+        if (ready != (read_idx + 1u)) {
+            break;  /* Producer has reserved this slot but has not published packet yet. */
+        }
+
+        uint32_t packet_word = __atomic_load_n(&packet_words[slot], __ATOMIC_ACQUIRE);
+        uint8_t pkt[4];
+        pkt[0] = (uint8_t)(packet_word & 0xFFu);
+        pkt[1] = (uint8_t)((packet_word >> 8) & 0xFFu);
+        pkt[2] = (uint8_t)((packet_word >> 16) & 0xFFu);
+        pkt[3] = (uint8_t)((packet_word >> 24) & 0xFFu);
+
+        if (!shadow_midi_to_move_packet_valid(pkt)) {
+            shadow_midi_to_move_dropped_count++;
+            read_idx++;
+            continue;
+        }
+
+        /* Force USB cable 2 while preserving CIN in low nibble. */
+        pkt[0] = (uint8_t)((2u << 4) | (pkt[0] & 0x0Fu));
+
+        if (!shadow_inject_midi_to_move_packet(pkt)) {
+            break;  /* MIDI_IN full this cycle */
+        }
+
+        read_idx++;
+        injected++;
+    }
+
+    if (read_idx != initial_read_idx) {
+        __atomic_store_n(&shadow_midi_to_move_shm->read_idx, read_idx, __ATOMIC_RELEASE);
+    }
+
+    shadow_midi_to_move_last_cycle_injected = injected;
+    shadow_midi_to_move_injected_count += injected;
 }
 
 /* Monitor screen reader messages and speak them with TTS (debounced) */
@@ -2815,12 +2962,15 @@ int ioctl(int fd, unsigned long request, ...)
                 /* No file I/O here — fopen("/proc/self/statm") can block
                  * when the disk is busy, causing audio clicks. */
                 unified_log("shim", LOG_LEVEL_DEBUG,
-                    "Heartbeat: pid=%d overruns=%d display_mode=%d la_pkts=%u la_ch=%d la_stale=%u la_sub_pid=%d la_restarts=%d pin_chal=%d",
+                    "Heartbeat: pid=%d overruns=%d display_mode=%d la_pkts=%u la_ch=%d la_stale=%u la_sub_pid=%d la_restarts=%d pin_chal=%d m2m_inj=%u m2m_drop=%u m2m_last=%u",
                     getpid(), consecutive_overruns,
                     shadow_display_mode,
                     link_audio.packets_intercepted, link_audio.move_channel_count,
                     la_stale_frames, (int)link_sub_pid, link_sub_restart_count,
-                    shadow_control ? shadow_control->pin_challenge_active : -1);
+                    shadow_control ? shadow_control->pin_challenge_active : -1,
+                    shadow_midi_to_move_injected_count,
+                    shadow_midi_to_move_dropped_count,
+                    shadow_midi_to_move_last_cycle_injected);
             }
         }
     }
@@ -4205,6 +4355,12 @@ do_ioctl:
         }
     }
 #endif /* !SHADOW_DISABLE_POST_IOCTL_MIDI */
+
+    /* === POST-IOCTL: MODULE -> MOVE MIDI INJECTION ===
+     * Drain module-generated USB-MIDI packets and inject them into Move's MIDI_IN
+     * as cable 2 (external USB MIDI) messages.
+     * Runs after MIDI_IN filtering so injected packets are not filtered out. */
+    shadow_drain_midi_to_move_queue();
 
 #if SHADOW_INPROCESS_POC
     /* === POST-IOCTL: DEFERRED DSP RENDERING (SLOW, ~300µs) ===

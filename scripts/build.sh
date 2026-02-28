@@ -344,6 +344,15 @@ mkdir -p ./build/modules/sound_generators/linein/
     -Isrc \
     -lm
 
+# Build MIDI Inject Test sound generator
+mkdir -p ./build/modules/sound_generators/midi_inject_test/
+"${CROSS_PREFIX}gcc" -g -O3 -shared -fPIC \
+    src/modules/sound_generators/midi_inject_test/midi_inject_test.c \
+    src/host/shadow_midi_to_move.c \
+    -o build/modules/sound_generators/midi_inject_test/dsp.so \
+    -Isrc \
+    -lm
+
 # Copy shared utilities
 for f in ./src/shared/*.mjs; do
     cp "$f" ./build/shared/
