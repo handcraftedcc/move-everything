@@ -14,8 +14,8 @@ if ! rg -n "last_non_empty_slot" "$shim" >/dev/null 2>&1; then
   exit 1
 fi
 
-if ! rg -n "search_start = \\(last_non_empty_slot >= 0\\)" "$shim" >/dev/null 2>&1; then
-  echo "FAIL: Missing append-after-tail search start logic" >&2
+if ! rg -n "search_start = j \\+ 4" "$shim" >/dev/null 2>&1; then
+  echo "FAIL: Missing contiguous-prefix append search logic" >&2
   exit 1
 fi
 

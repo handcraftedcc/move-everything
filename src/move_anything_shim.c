@@ -1420,6 +1420,8 @@ static uint32_t shadow_midi_to_move_last_cycle_midi_in_full = 0;
 static int shadow_midi_to_move_last_insert_slot = -1;
 static uint32_t shadow_midi_to_move_last_midi_in_occupancy = 0;
 static uint8_t shadow_midi_to_move_note_state[16][128];
+static uint32_t shadow_internal_poly_aftertouch_drop_count = 0;
+static uint32_t shadow_internal_chan_aftertouch_drop_count = 0;
 
 static uint32_t last_screenreader_sequence = 0;  /* Track last spoken message */
 static uint64_t last_speech_time_ms = 0;  /* Rate limiting for TTS */
@@ -1793,6 +1795,19 @@ static int shadow_midi_to_move_diag_enabled(void)
     return enabled;
 }
 
+/* Suppress high-rate internal aftertouch from Move pads.
+ * This stream is a known trigger for native engine instability when combined
+ * with mailbox MIDI injection; sequencer-driven input (no live pressure stream)
+ * remains stable. */
+static int shadow_should_suppress_internal_aftertouch(uint8_t cin, uint8_t cable, uint8_t status)
+{
+    if (cable != 0x00) return 0;  /* Only Move internal cable */
+    uint8_t type = (uint8_t)(status & 0xF0u);
+    if (cin == 0x0A && type == 0xA0) return 1;  /* Poly aftertouch */
+    if (cin == 0x0D && type == 0xD0) return 1;  /* Channel aftertouch */
+    return 0;
+}
+
 static uint32_t shadow_midi_in_count_occupied_slots(const uint8_t *midi_in)
 {
     uint32_t occupied = 0;
@@ -1811,13 +1826,26 @@ static int shadow_inject_midi_to_move_packet(const uint8_t pkt[4], int *insert_s
     if (insert_slot) *insert_slot = -1;
 
     uint8_t *midi_in = global_mmap_addr + MIDI_IN_OFFSET;
+    int search_start = 0;
     int last_non_empty_slot = -1;
+
+    /* Append after the contiguous occupied prefix starting at slot 0.
+     * Some mailbox frames can contain sparse non-zero sentinels near the end;
+     * using absolute last_non_empty would place injections at slot 252, which
+     * can be ignored by Move event parsing in practice. */
     for (int j = 0; j < MIDI_BUFFER_SIZE; j += 4) {
+        if (__atomic_load_n(&midi_in[j + 0], __ATOMIC_ACQUIRE) == 0) {
+            break;
+        }
+        search_start = j + 4;
+    }
+
+    /* Keep scanning for diagnostics so we can detect sparse non-zero tails. */
+    for (int j = search_start; j < MIDI_BUFFER_SIZE; j += 4) {
         if (__atomic_load_n(&midi_in[j + 0], __ATOMIC_ACQUIRE) != 0) {
             last_non_empty_slot = j;
         }
     }
-    int search_start = (last_non_empty_slot >= 0) ? (last_non_empty_slot + 4) : 0;
 
     /* Prefer appending after the current tail to preserve order.
      * If there is no free slot to the right, wrap and search from the start
@@ -3083,7 +3111,7 @@ int ioctl(int fd, unsigned long request, ...)
                 /* No file I/O here — fopen("/proc/self/statm") can block
                  * when the disk is busy, causing audio clicks. */
                 unified_log("shim", LOG_LEVEL_DEBUG,
-                    "Heartbeat: pid=%d overruns=%d display_mode=%d la_pkts=%u la_ch=%d la_stale=%u la_sub_pid=%d la_restarts=%d pin_chal=%d m2m_inj=%u m2m_drop=%u m2m_dup=%u m2m_full=%u m2m_last=%u m2m_slot=%d m2m_occ=%u",
+                    "Heartbeat: pid=%d overruns=%d display_mode=%d la_pkts=%u la_ch=%d la_stale=%u la_sub_pid=%d la_restarts=%d pin_chal=%d m2m_inj=%u m2m_drop=%u m2m_dup=%u m2m_full=%u m2m_last=%u m2m_slot=%d m2m_occ=%u at_poly=%u at_ch=%u",
                     getpid(), consecutive_overruns,
                     shadow_display_mode,
                     link_audio.packets_intercepted, link_audio.move_channel_count,
@@ -3095,7 +3123,9 @@ int ioctl(int fd, unsigned long request, ...)
                     shadow_midi_to_move_midi_in_full_count,
                     shadow_midi_to_move_last_cycle_injected,
                     shadow_midi_to_move_last_insert_slot,
-                    shadow_midi_to_move_last_midi_in_occupancy);
+                    shadow_midi_to_move_last_midi_in_occupancy,
+                    shadow_internal_poly_aftertouch_drop_count,
+                    shadow_internal_chan_aftertouch_drop_count);
             }
         }
     }
@@ -3586,6 +3616,16 @@ do_ioctl:
 
                 int filter = 0;
 
+                if (shadow_should_suppress_internal_aftertouch(cin, cable, status)) {
+                    if (cin == 0x0A) shadow_internal_poly_aftertouch_drop_count++;
+                    else shadow_internal_chan_aftertouch_drop_count++;
+                    sh_midi[j] = 0;
+                    sh_midi[j + 1] = 0;
+                    sh_midi[j + 2] = 0;
+                    sh_midi[j + 3] = 0;
+                    continue;
+                }
+
                 /* Only filter internal cable (0x00) */
                 if (cable == 0x00) {
                     /* Overtake mode split:
@@ -3644,8 +3684,26 @@ do_ioctl:
                 }
             }
         } else {
-            /* Not in shadow mode - copy MIDI_IN directly */
-            memcpy(sh_midi, hw_midi, MIDI_BUFFER_SIZE);
+            /* Not in shadow mode: pass through MIDI_IN, but suppress internal
+             * aftertouch stream (A0/D0) for stability when using injector. */
+            for (int j = 0; j < MIDI_BUFFER_SIZE; j += 4) {
+                uint8_t cin = hw_midi[j] & 0x0F;
+                uint8_t cable = (hw_midi[j] >> 4) & 0x0F;
+                uint8_t status = hw_midi[j + 1];
+                if (shadow_should_suppress_internal_aftertouch(cin, cable, status)) {
+                    if (cin == 0x0A) shadow_internal_poly_aftertouch_drop_count++;
+                    else shadow_internal_chan_aftertouch_drop_count++;
+                    sh_midi[j] = 0;
+                    sh_midi[j + 1] = 0;
+                    sh_midi[j + 2] = 0;
+                    sh_midi[j + 3] = 0;
+                } else {
+                    sh_midi[j] = hw_midi[j];
+                    sh_midi[j + 1] = hw_midi[j + 1];
+                    sh_midi[j + 2] = hw_midi[j + 2];
+                    sh_midi[j + 3] = hw_midi[j + 3];
+                }
+            }
         }
 
         /* === SHIFT+MENU SHORTCUT DETECTION AND BLOCKING (POST-IOCTL) ===
