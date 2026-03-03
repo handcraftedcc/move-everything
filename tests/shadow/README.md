@@ -16,6 +16,9 @@ Verifies that `shadowModeDebounce` resets when ANY part of the hotkey combo is r
 ### test_shadow_filter_hotkey_cc.sh
 Verifies that shift CC (0x31) is NOT filtered in the post-ioctl MIDI filter. This allows the hotkey combo (Shift+Vol+Knob1) to work for exiting shadow mode.
 
+### test_midi_to_move_injection_stability.sh
+Verifies stability guards for module->Move MIDI injection: deterministic append-after-tail insertion, duplicate note-edge coalescing, and diagnostic telemetry hook.
+
 ## Running Tests
 
 ```bash

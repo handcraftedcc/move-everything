@@ -1413,6 +1413,13 @@ static uint8_t last_shadow_midi_dsp_ready = 0;
 static uint32_t shadow_midi_to_move_injected_count = 0;
 static uint32_t shadow_midi_to_move_dropped_count = 0;
 static uint32_t shadow_midi_to_move_last_cycle_injected = 0;
+static uint32_t shadow_midi_to_move_duplicate_edge_dropped_count = 0;
+static uint32_t shadow_midi_to_move_midi_in_full_count = 0;
+static uint32_t shadow_midi_to_move_last_cycle_duplicate_drops = 0;
+static uint32_t shadow_midi_to_move_last_cycle_midi_in_full = 0;
+static int shadow_midi_to_move_last_insert_slot = -1;
+static uint32_t shadow_midi_to_move_last_midi_in_occupancy = 0;
+static uint8_t shadow_midi_to_move_note_state[16][128];
 
 static uint32_t last_screenreader_sequence = 0;  /* Track last spoken message */
 static uint64_t last_speech_time_ms = 0;  /* Rate limiting for TTS */
@@ -1775,25 +1782,67 @@ static void init_shadow_shm(void)
            shadow_display_shm, shadow_control, shadow_ui_state, shadow_param, shadow_midi_out_shm, shadow_midi_dsp_shm, shadow_screenreader_shm, shadow_overlay_shm, shadow_midi_to_move_shm);
 }
 
-static int shadow_inject_midi_to_move_packet(const uint8_t pkt[4])
+static int shadow_midi_to_move_diag_enabled(void)
+{
+    static int enabled = -1;
+    static int check_counter = 0;
+
+    if (enabled < 0 || (check_counter++ % 200 == 0)) {
+        enabled = (access("/data/UserData/move-anything/midi_to_move_diag_on", F_OK) == 0);
+    }
+    return enabled;
+}
+
+static uint32_t shadow_midi_in_count_occupied_slots(const uint8_t *midi_in)
+{
+    uint32_t occupied = 0;
+    if (!midi_in) return 0;
+    for (int j = 0; j < MIDI_BUFFER_SIZE; j += 4) {
+        if (__atomic_load_n(&midi_in[j + 0], __ATOMIC_ACQUIRE) != 0) occupied++;
+    }
+    return occupied;
+}
+
+static int shadow_inject_midi_to_move_packet(const uint8_t pkt[4], int *insert_slot)
 {
     if (!pkt) return 0;
     if (!global_mmap_addr) return 0;
 
-    uint8_t *midi_in = global_mmap_addr + MIDI_IN_OFFSET;
-    for (int j = 0; j < MIDI_BUFFER_SIZE; j += 4) {
-        if (__atomic_load_n(&midi_in[j + 0], __ATOMIC_ACQUIRE) != 0) continue;
+    if (insert_slot) *insert_slot = -1;
 
-        /* Publish payload first, then mark slot occupied via byte 0.
-         * Move considers slot[0] != 0 as valid; writing it first can expose
-         * partially-written packets to concurrent mailbox readers. */
-        __atomic_store_n(&midi_in[j + 1], pkt[1], __ATOMIC_RELAXED);
-        __atomic_store_n(&midi_in[j + 2], pkt[2], __ATOMIC_RELAXED);
-        __atomic_store_n(&midi_in[j + 3], pkt[3], __ATOMIC_RELAXED);
-        __atomic_thread_fence(__ATOMIC_RELEASE);
-        __atomic_store_n(&midi_in[j + 0], pkt[0], __ATOMIC_RELEASE);
-        return 1;
-    }    
+    uint8_t *midi_in = global_mmap_addr + MIDI_IN_OFFSET;
+    int last_non_empty_slot = -1;
+    for (int j = 0; j < MIDI_BUFFER_SIZE; j += 4) {
+        if (__atomic_load_n(&midi_in[j + 0], __ATOMIC_ACQUIRE) != 0) {
+            last_non_empty_slot = j;
+        }
+    }
+    int search_start = (last_non_empty_slot >= 0) ? (last_non_empty_slot + 4) : 0;
+
+    /* Prefer appending after the current tail to preserve order.
+     * If there is no free slot to the right, wrap and search from the start
+     * so injection cannot stall when the tail is near the end of the mailbox. */
+    for (int pass = 0; pass < 2; pass++) {
+        int begin = (pass == 0) ? search_start : 0;
+        int end = (pass == 0) ? MIDI_BUFFER_SIZE : search_start;
+        if (begin >= end) continue;
+
+        for (int j = begin; j < end; j += 4) {
+            /* Slot is considered empty when byte0 is clear; bytes 1..3 may be stale. */
+            if (__atomic_load_n(&midi_in[j + 0], __ATOMIC_ACQUIRE) != 0) continue;
+
+            /* Publish payload first, then mark slot occupied via byte 0.
+             * Move considers slot[0] != 0 as valid; writing it first can expose
+             * partially-written packets to concurrent mailbox readers. */
+            __atomic_store_n(&midi_in[j + 1], pkt[1], __ATOMIC_RELAXED);
+            __atomic_store_n(&midi_in[j + 2], pkt[2], __ATOMIC_RELAXED);
+            __atomic_store_n(&midi_in[j + 3], pkt[3], __ATOMIC_RELAXED);
+            __atomic_thread_fence(__ATOMIC_RELEASE);
+            __atomic_store_n(&midi_in[j + 0], pkt[0], __ATOMIC_RELEASE);
+            if (insert_slot) *insert_slot = j;
+            return 1;
+        }
+    }
 
     return 0;
 }
@@ -1818,9 +1867,43 @@ static int shadow_midi_to_move_packet_valid(const uint8_t pkt[4])
     return 0;
 }
 
+static int shadow_midi_to_move_is_duplicate_edge(const uint8_t pkt[4])
+{
+    uint8_t status = pkt[1];
+    uint8_t type = (uint8_t)(status & 0xF0u);
+    uint8_t ch = (uint8_t)(status & 0x0Fu);
+    uint8_t note = (uint8_t)(pkt[2] & 0x7Fu);
+    uint8_t vel = pkt[3];
+
+    if (type == 0x90u && vel > 0) {
+        return shadow_midi_to_move_note_state[ch][note] ? 1 : 0;
+    }
+    if (type == 0x80u || (type == 0x90u && vel == 0)) {
+        return shadow_midi_to_move_note_state[ch][note] ? 0 : 1;
+    }
+    return 0;
+}
+
+static void shadow_midi_to_move_mark_edge_applied(const uint8_t pkt[4])
+{
+    uint8_t status = pkt[1];
+    uint8_t type = (uint8_t)(status & 0xF0u);
+    uint8_t ch = (uint8_t)(status & 0x0Fu);
+    uint8_t note = (uint8_t)(pkt[2] & 0x7Fu);
+    uint8_t vel = pkt[3];
+
+    if (type == 0x90u && vel > 0) {
+        shadow_midi_to_move_note_state[ch][note] = 1;
+    } else if (type == 0x80u || (type == 0x90u && vel == 0)) {
+        shadow_midi_to_move_note_state[ch][note] = 0;
+    }
+}
+
 static void shadow_drain_midi_to_move_queue(void)
 {
     shadow_midi_to_move_last_cycle_injected = 0;
+    shadow_midi_to_move_last_cycle_duplicate_drops = 0;
+    shadow_midi_to_move_last_cycle_midi_in_full = 0;
 
     if (!shadow_midi_to_move_shm || !global_mmap_addr) return;
     if (shadow_midi_to_move_shm->magic != SHADOW_MIDI_TO_MOVE_MAGIC ||
@@ -1846,6 +1929,9 @@ static void shadow_drain_midi_to_move_queue(void)
         (const uint32_t *)shadow_midi_to_move_packets_const(shadow_midi_to_move_shm);
     uint32_t *ready_words = shadow_midi_to_move_ready(shadow_midi_to_move_shm);
     uint32_t injected = 0;
+    uint32_t duplicate_drops = 0;
+    int midi_in_full_this_cycle = 0;
+    int last_insert_slot = -1;
 
     while (read_idx != write_idx && injected < SHADOW_MIDI_TO_MOVE_MAX_INJECT_PER_CYCLE) {
         uint32_t slot = read_idx % capacity;
@@ -1870,10 +1956,19 @@ static void shadow_drain_midi_to_move_queue(void)
         /* Force USB cable 2 while preserving CIN in low nibble. */
         pkt[0] = (uint8_t)((2u << 4) | (pkt[0] & 0x0Fu));
 
-        if (!shadow_inject_midi_to_move_packet(pkt)) {
+        if (shadow_midi_to_move_is_duplicate_edge(pkt)) {
+            shadow_midi_to_move_dropped_count++;
+            duplicate_drops++;
+            read_idx++;
+            continue;
+        }
+
+        if (!shadow_inject_midi_to_move_packet(pkt, &last_insert_slot)) {
+            midi_in_full_this_cycle = 1;
             break;  /* MIDI_IN full this cycle */
         }
 
+        shadow_midi_to_move_mark_edge_applied(pkt);
         read_idx++;
         injected++;
     }
@@ -1883,7 +1978,33 @@ static void shadow_drain_midi_to_move_queue(void)
     }
 
     shadow_midi_to_move_last_cycle_injected = injected;
+    shadow_midi_to_move_last_cycle_duplicate_drops = duplicate_drops;
+    shadow_midi_to_move_last_cycle_midi_in_full = (uint32_t)(midi_in_full_this_cycle ? 1 : 0);
     shadow_midi_to_move_injected_count += injected;
+    shadow_midi_to_move_duplicate_edge_dropped_count += duplicate_drops;
+    shadow_midi_to_move_midi_in_full_count += (uint32_t)(midi_in_full_this_cycle ? 1 : 0);
+    shadow_midi_to_move_last_insert_slot = last_insert_slot;
+    shadow_midi_to_move_last_midi_in_occupancy =
+        shadow_midi_in_count_occupied_slots(global_mmap_addr + MIDI_IN_OFFSET);
+
+    if (shadow_midi_to_move_diag_enabled()) {
+        static uint32_t diag_counter = 0;
+        int should_log = 0;
+
+        if (injected > 0 || duplicate_drops > 0 || midi_in_full_this_cycle) {
+            should_log = 1;
+        } else if ((diag_counter++ % 256u) == 0u) {
+            should_log = 1;
+        }
+
+        if (should_log) {
+            unified_log("shim", LOG_LEVEL_DEBUG,
+                        "midi_to_move diag: pending=%u read=%u write=%u inj=%u dup_drop=%u full=%d slot=%d occ=%u",
+                        pending, read_idx, write_idx, injected, duplicate_drops,
+                        midi_in_full_this_cycle, last_insert_slot,
+                        shadow_midi_to_move_last_midi_in_occupancy);
+        }
+    }
 }
 
 /* Monitor screen reader messages and speak them with TTS (debounced) */
@@ -2962,7 +3083,7 @@ int ioctl(int fd, unsigned long request, ...)
                 /* No file I/O here — fopen("/proc/self/statm") can block
                  * when the disk is busy, causing audio clicks. */
                 unified_log("shim", LOG_LEVEL_DEBUG,
-                    "Heartbeat: pid=%d overruns=%d display_mode=%d la_pkts=%u la_ch=%d la_stale=%u la_sub_pid=%d la_restarts=%d pin_chal=%d m2m_inj=%u m2m_drop=%u m2m_last=%u",
+                    "Heartbeat: pid=%d overruns=%d display_mode=%d la_pkts=%u la_ch=%d la_stale=%u la_sub_pid=%d la_restarts=%d pin_chal=%d m2m_inj=%u m2m_drop=%u m2m_dup=%u m2m_full=%u m2m_last=%u m2m_slot=%d m2m_occ=%u",
                     getpid(), consecutive_overruns,
                     shadow_display_mode,
                     link_audio.packets_intercepted, link_audio.move_channel_count,
@@ -2970,7 +3091,11 @@ int ioctl(int fd, unsigned long request, ...)
                     shadow_control ? shadow_control->pin_challenge_active : -1,
                     shadow_midi_to_move_injected_count,
                     shadow_midi_to_move_dropped_count,
-                    shadow_midi_to_move_last_cycle_injected);
+                    shadow_midi_to_move_duplicate_edge_dropped_count,
+                    shadow_midi_to_move_midi_in_full_count,
+                    shadow_midi_to_move_last_cycle_injected,
+                    shadow_midi_to_move_last_insert_slot,
+                    shadow_midi_to_move_last_midi_in_occupancy);
             }
         }
     }
