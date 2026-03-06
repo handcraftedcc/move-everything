@@ -230,6 +230,7 @@ const VIEWS = {
     FILEPATH_BROWSER: "filepathbrowser", // Generic filepath picker for filepath params
     KNOB_EDITOR: "knobedit",  // Edit knob assignments for a slot
     KNOB_PARAM_PICKER: "knobpick", // Pick parameter for a knob assignment
+    PARAM_LFO_TARGET_PICKER: "paramlfotargetpicker", // Dedicated target picker for param_lfo
     STORE_PICKER_CATEGORIES: "storepickercats", // Store: browse categories
     STORE_PICKER_LIST: "storepickerlist",     // Store: browse modules for category
     STORE_PICKER_DETAIL: "storepickerdetail", // Store: module info and actions
@@ -320,6 +321,7 @@ const VIEW_NAMES = {
     [VIEWS.FILEPATH_BROWSER]: "File Browser",
     [VIEWS.KNOB_EDITOR]: "Knob Editor",
     [VIEWS.KNOB_PARAM_PICKER]: "Parameter Picker",
+    [VIEWS.PARAM_LFO_TARGET_PICKER]: "LFO Target Picker",
     [VIEWS.STORE_PICKER_CATEGORIES]: "Module Store",
     [VIEWS.STORE_PICKER_LIST]: "Module Store",
     [VIEWS.STORE_PICKER_DETAIL]: "Module Details",
@@ -635,6 +637,14 @@ let knobParamPickerParams = [];  // Available params in current folder
 let knobParamPickerHierarchy = null; // Parsed ui_hierarchy for current target
 let knobParamPickerLevel = null;     // Current level name in hierarchy (null = flat mode)
 let knobParamPickerPath = [];        // Navigation path for back in hierarchy
+let paramLfoPickerSlot = -1;
+let paramLfoPickerComponent = "";
+let paramLfoPickerStartKey = "";    // "target_component" or "target_param"
+let paramLfoPickerMode = "target";  // target -> choose component, param -> choose numeric param
+let paramLfoPickerTarget = "";
+let paramLfoPickerIndex = 0;
+let paramLfoPickerTargets = [];
+let paramLfoPickerParams = [];
 let lastSlotModuleSignatures = [];  // Track per-slot module changes for knob cache refresh
 
 /* Master FX state */
@@ -4995,6 +5005,156 @@ function getKnobParamsForTarget(slot, target) {
     return params;
 }
 
+function isParamLfoHierarchyTargetField(key) {
+    if (key !== "target_component" && key !== "target_param") return false;
+    if (hierEditorSlot < 0 || !hierEditorComponent || hierEditorIsMasterFx) return false;
+
+    const cfg = chainConfigs[hierEditorSlot];
+    if (!cfg) return false;
+    const moduleData = cfg[hierEditorComponent];
+    return !!(moduleData && moduleData.module === "param_lfo");
+}
+
+function resetParamLfoTargetPickerState() {
+    paramLfoPickerSlot = -1;
+    paramLfoPickerComponent = "";
+    paramLfoPickerStartKey = "";
+    paramLfoPickerMode = "target";
+    paramLfoPickerTarget = "";
+    paramLfoPickerIndex = 0;
+    paramLfoPickerTargets = [];
+    paramLfoPickerParams = [];
+}
+
+function getParamLfoPickerTargets(slot, componentKey) {
+    const selfTarget = getComponentParamPrefix(componentKey);
+    const targets = getKnobTargets(slot);
+    return targets.filter(t => !t.id || t.id !== selfTarget);
+}
+
+function getNumericParamsForTarget(slot, target) {
+    const params = [];
+    const chainParamsJson = getSlotParam(slot, `${target}:chain_params`);
+    if (!chainParamsJson) return params;
+
+    try {
+        const chainParams = JSON.parse(chainParamsJson);
+        if (!Array.isArray(chainParams)) return params;
+        for (const p of chainParams) {
+            if (!p || !p.key) continue;
+            const type = (p.type || "").toLowerCase();
+            const isNumeric = type === "float" || type === "int" ||
+                (!type && (p.min !== undefined || p.max !== undefined));
+            if (!isNumeric) continue;
+            if (!params.find(existing => existing.key === p.key)) {
+                params.push({ key: p.key, label: p.name || p.label || p.key });
+            }
+        }
+    } catch (e) {
+        /* Ignore parse errors and return empty numeric set. */
+    }
+
+    return params;
+}
+
+function enterParamLfoTargetPicker(key) {
+    if (!isParamLfoHierarchyTargetField(key)) return false;
+
+    resetParamLfoTargetPickerState();
+    paramLfoPickerSlot = hierEditorSlot;
+    paramLfoPickerComponent = hierEditorComponent;
+    paramLfoPickerStartKey = key;
+    paramLfoPickerTargets = getParamLfoPickerTargets(hierEditorSlot, hierEditorComponent);
+
+    const prefix = getComponentParamPrefix(hierEditorComponent);
+    const currentTarget = getSlotParam(hierEditorSlot, `${prefix}:target_component`) || "";
+    const currentParam = getSlotParam(hierEditorSlot, `${prefix}:target_param`) || "";
+
+    const targetIdx = paramLfoPickerTargets.findIndex(t => t.id === currentTarget);
+    if (targetIdx >= 0) {
+        paramLfoPickerIndex = targetIdx;
+    }
+
+    if (key === "target_param" && currentTarget) {
+        const numericParams = getNumericParamsForTarget(hierEditorSlot, currentTarget);
+        if (numericParams.length > 0) {
+            paramLfoPickerMode = "param";
+            paramLfoPickerTarget = currentTarget;
+            paramLfoPickerParams = numericParams;
+            const paramIdx = numericParams.findIndex(p => p.key === currentParam);
+            paramLfoPickerIndex = (paramIdx >= 0) ? paramIdx : 0;
+        }
+    }
+
+    setView(VIEWS.PARAM_LFO_TARGET_PICKER);
+    needsRedraw = true;
+    announce(key === "target_component" ? "LFO target component" : "LFO target parameter");
+    return true;
+}
+
+function closeParamLfoTargetPicker(announcement) {
+    resetParamLfoTargetPickerState();
+    setView(VIEWS.HIERARCHY_EDITOR);
+    needsRedraw = true;
+    if (announcement) {
+        announce(announcement);
+    }
+}
+
+function handleParamLfoTargetPickerSelect() {
+    if (paramLfoPickerSlot < 0 || !paramLfoPickerComponent) {
+        closeParamLfoTargetPicker("Hierarchy Editor");
+        return;
+    }
+
+    const prefix = getComponentParamPrefix(paramLfoPickerComponent);
+    if (!prefix) {
+        closeParamLfoTargetPicker("Hierarchy Editor");
+        return;
+    }
+
+    if (paramLfoPickerMode === "target") {
+        const selectedTarget = paramLfoPickerTargets[paramLfoPickerIndex];
+        if (!selectedTarget) return;
+
+        if (!selectedTarget.id) {
+            setSlotParam(paramLfoPickerSlot, `${prefix}:target_component`, "");
+            setSlotParam(paramLfoPickerSlot, `${prefix}:target_param`, "");
+            closeParamLfoTargetPicker("LFO target cleared");
+            return;
+        }
+
+        setSlotParam(paramLfoPickerSlot, `${prefix}:target_component`, selectedTarget.id);
+
+        if (paramLfoPickerStartKey === "target_component") {
+            setSlotParam(paramLfoPickerSlot, `${prefix}:target_param`, "");
+            closeParamLfoTargetPicker(`Target component ${selectedTarget.id}`);
+            return;
+        }
+
+        paramLfoPickerTarget = selectedTarget.id;
+        paramLfoPickerParams = getNumericParamsForTarget(paramLfoPickerSlot, selectedTarget.id);
+        paramLfoPickerMode = "param";
+        paramLfoPickerIndex = 0;
+
+        if (paramLfoPickerParams.length === 0) {
+            setSlotParam(paramLfoPickerSlot, `${prefix}:target_param`, "");
+            closeParamLfoTargetPicker("No numeric params");
+        } else {
+            const first = paramLfoPickerParams[0];
+            announceMenuItem("Param", first.label || first.key || "");
+        }
+        return;
+    }
+
+    const selectedParam = paramLfoPickerParams[paramLfoPickerIndex];
+    if (!selectedParam) return;
+
+    setSlotParam(paramLfoPickerSlot, `${prefix}:target_component`, paramLfoPickerTarget);
+    setSlotParam(paramLfoPickerSlot, `${prefix}:target_param`, selectedParam.key || "");
+    closeParamLfoTargetPicker(`Target ${paramLfoPickerTarget}:${selectedParam.key}`);
+}
+
 /* Get display label for a knob assignment */
 function getKnobAssignmentLabel(assignment) {
     if (!assignment || !assignment.target || !assignment.param) {
@@ -6826,6 +6986,21 @@ function handleJog(delta) {
                 }
             }
             break;
+        case VIEWS.PARAM_LFO_TARGET_PICKER:
+            if (paramLfoPickerMode === "target") {
+                paramLfoPickerIndex = Math.max(0, Math.min(paramLfoPickerTargets.length - 1, paramLfoPickerIndex + delta));
+                if (paramLfoPickerTargets.length > 0) {
+                    const t = paramLfoPickerTargets[paramLfoPickerIndex];
+                    announceMenuItem("Target", t.name || t.label || t.id || "None");
+                }
+            } else {
+                paramLfoPickerIndex = Math.max(0, Math.min(paramLfoPickerParams.length - 1, paramLfoPickerIndex + delta));
+                if (paramLfoPickerParams.length > 0) {
+                    const p = paramLfoPickerParams[paramLfoPickerIndex];
+                    announceMenuItem("Param", p.label || p.key || "Unknown");
+                }
+            }
+            break;
         case VIEWS.UPDATE_PROMPT:
             /* +1 for the "Update All" item at the end */
             pendingUpdateIndex = Math.max(0, Math.min(pendingUpdates.length, pendingUpdateIndex + delta));
@@ -7429,6 +7604,9 @@ function handleSelect() {
                     const selectedKey = (selectedParam && typeof selectedParam === "object")
                         ? (selectedParam.key || selectedParam)
                         : selectedParam;
+                    if (!hierEditorEditMode && enterParamLfoTargetPicker(selectedKey)) {
+                        break;
+                    }
                     const meta = getParamMetadata(selectedKey);
                     if (!hierEditorEditMode && meta && meta.type === "filepath") {
                         openHierarchyFilepathBrowser(selectedKey, meta);
@@ -7532,6 +7710,9 @@ function handleSelect() {
                     applyKnobAssignment(knobParamPickerFolder, selected.key);
                 }
             }
+            break;
+        case VIEWS.PARAM_LFO_TARGET_PICKER:
+            handleParamLfoTargetPickerSelect();
             break;
         case VIEWS.UPDATE_PROMPT:
             if (pendingUpdateIndex === pendingUpdates.length) {
@@ -8024,6 +8205,17 @@ function handleBack() {
                 setView(VIEWS.KNOB_EDITOR);
                 announce("Knob Editor");
                 needsRedraw = true;
+            }
+            break;
+        case VIEWS.PARAM_LFO_TARGET_PICKER:
+            if (paramLfoPickerMode === "param") {
+                paramLfoPickerMode = "target";
+                const targetIdx = paramLfoPickerTargets.findIndex(t => t.id === paramLfoPickerTarget);
+                paramLfoPickerIndex = targetIdx >= 0 ? targetIdx : 0;
+                needsRedraw = true;
+                announce("LFO target");
+            } else {
+                closeParamLfoTargetPicker("Hierarchy Editor");
             }
             break;
         case VIEWS.UPDATE_PROMPT:
@@ -8630,6 +8822,32 @@ function drawKnobParamPicker() {
         });
 
         drawFooter({left: "Back: targets", right: "Click: assign"});
+    }
+}
+
+function drawParamLfoTargetPicker() {
+    clear_screen();
+
+    if (paramLfoPickerMode === "target") {
+        drawHeader("LFO Target");
+        drawMenuList({
+            items: paramLfoPickerTargets,
+            selectedIndex: paramLfoPickerIndex,
+            listArea: { topY: LIST_TOP_Y, bottomY: FOOTER_RULE_Y },
+            getLabel: (item) => item.name,
+            getValue: () => ""
+        });
+        drawFooter({left: "Back: cancel", right: "Click: select"});
+    } else {
+        drawHeader("LFO Param");
+        drawMenuList({
+            items: paramLfoPickerParams,
+            selectedIndex: paramLfoPickerIndex,
+            listArea: { topY: LIST_TOP_Y, bottomY: FOOTER_RULE_Y },
+            getLabel: (item) => item.label,
+            getValue: () => ""
+        });
+        drawFooter({left: "Back: targets", right: "Click: select"});
     }
 }
 
@@ -9570,6 +9788,9 @@ globalThis.tick = function() {
             break;
         case VIEWS.KNOB_PARAM_PICKER:
             drawKnobParamPicker();
+            break;
+        case VIEWS.PARAM_LFO_TARGET_PICKER:
+            drawParamLfoTargetPicker();
             break;
         case VIEWS.STORE_PICKER_CATEGORIES:
             drawStorePickerCategories();
