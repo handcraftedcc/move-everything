@@ -149,6 +149,30 @@ typedef struct {
     int option_count;       /* Number of enum options */
 } chain_param_info_t;
 
+#define MAX_MOD_TARGETS 32
+#define MAX_MOD_SOURCES 8
+
+/* Runtime modulation target state (non-destructive overlay). */
+typedef struct mod_target_state {
+    int active;
+    int enabled;
+    char source_id[32];
+    char target[16];
+    char param[32];
+    float base_value;
+    float contribution;
+    float effective_value;
+    float min_val;
+    float max_val;
+    knob_type_t type;
+} mod_target_state_t;
+
+/* Runtime modulation source state (reserved for future expansion). */
+typedef struct {
+    int active;
+    char source_id[32];
+} mod_source_state_t;
+
 #define MOVE_PAD_NOTE_MAX 99
 
 /* MIDI FX parameter storage (key-value pairs for flexible configuration) */
@@ -420,6 +444,12 @@ typedef struct chain_instance {
     knob_mapping_t knob_mappings[MAX_KNOB_MAPPINGS];
     int knob_mapping_count;
     uint64_t knob_last_time_ms[MAX_KNOB_MAPPINGS];  /* For acceleration */
+
+    /* Runtime modulation bus state */
+    mod_target_state_t mod_targets[MAX_MOD_TARGETS];
+    int mod_target_count;
+    mod_source_state_t mod_sources[MAX_MOD_SOURCES];
+    int mod_source_count;
 
     /* Mute countdown after patch switch */
     int mute_countdown;
@@ -3960,8 +3990,57 @@ static void v2_chain_log(chain_instance_t *inst, const char *msg) {
     }
 }
 
-/* Placeholder modulation callbacks.
- * Full runtime behavior is implemented by follow-up tasks. */
+static float chain_mod_clampf(float value, float min_val, float max_val) {
+    if (value < min_val) return min_val;
+    if (value > max_val) return max_val;
+    return value;
+}
+
+static mod_target_state_t *chain_mod_find_target_entry(chain_instance_t *inst,
+                                                        const char *target,
+                                                        const char *param) {
+    if (!inst || !target || !param) return NULL;
+
+    for (int i = 0; i < inst->mod_target_count && i < MAX_MOD_TARGETS; i++) {
+        mod_target_state_t *entry = &inst->mod_targets[i];
+        if (!entry->active) continue;
+        if (strcmp(entry->target, target) == 0 && strcmp(entry->param, param) == 0) {
+            return entry;
+        }
+    }
+    return NULL;
+}
+
+static mod_target_state_t *chain_mod_alloc_target_entry(chain_instance_t *inst,
+                                                         const char *target,
+                                                         const char *param) {
+    mod_target_state_t *entry = chain_mod_find_target_entry(inst, target, param);
+    if (entry) return entry;
+    if (!inst || !target || !param) return NULL;
+
+    for (int i = 0; i < MAX_MOD_TARGETS; i++) {
+        entry = &inst->mod_targets[i];
+        if (entry->active) continue;
+
+        memset(entry, 0, sizeof(*entry));
+        entry->active = 1;
+        strncpy(entry->target, target, sizeof(entry->target) - 1);
+        strncpy(entry->param, param, sizeof(entry->param) - 1);
+        entry->min_val = 0.0f;
+        entry->max_val = 1.0f;
+        entry->type = KNOB_TYPE_FLOAT;
+
+        if (i >= inst->mod_target_count) {
+            inst->mod_target_count = i + 1;
+        }
+        return entry;
+    }
+
+    return NULL;
+}
+
+/* Runtime modulation callback (initial stateful implementation).
+ * Applies non-destructive contribution math and stores effective values. */
 static int chain_mod_emit_value(void *ctx,
                                 const char *source_id,
                                 const char *target,
@@ -3971,21 +4050,54 @@ static int chain_mod_emit_value(void *ctx,
                                 float offset,
                                 int bipolar,
                                 int enabled) {
-    (void)ctx;
-    (void)source_id;
-    (void)target;
-    (void)param;
-    (void)signal;
-    (void)depth;
-    (void)offset;
-    (void)bipolar;
-    (void)enabled;
-    return -1;
+    chain_instance_t *inst = (chain_instance_t *)ctx;
+    if (!inst) inst = g_v1_instance;
+    if (!inst || !source_id || !target || !param) return -1;
+
+    if (!enabled) {
+        chain_mod_clear_source(inst, source_id);
+        return 0;
+    }
+
+    chain_param_info_t *pinfo = find_param_by_key(inst, target, param);
+    if (!pinfo) return -1;
+    if (pinfo->type == KNOB_TYPE_ENUM) return -1;  /* v1 numeric only */
+
+    mod_target_state_t *entry = chain_mod_alloc_target_entry(inst, target, param);
+    if (!entry) return -1;
+
+    strncpy(entry->source_id, source_id, sizeof(entry->source_id) - 1);
+    entry->enabled = 1;
+    entry->type = pinfo->type;
+    entry->min_val = pinfo->min_val;
+    entry->max_val = pinfo->max_val;
+
+    /* For unipolar sources, map [-1,1] into [0,1] before depth scaling. */
+    float mod_signal = signal;
+    if (!bipolar) {
+        mod_signal = (signal + 1.0f) * 0.5f;
+    }
+
+    entry->contribution = (mod_signal * depth) + offset;
+    entry->effective_value = chain_mod_clampf(entry->base_value + entry->contribution,
+                                              entry->min_val,
+                                              entry->max_val);
+    return 0;
 }
 
 static void chain_mod_clear_source(void *ctx, const char *source_id) {
-    (void)ctx;
-    (void)source_id;
+    chain_instance_t *inst = (chain_instance_t *)ctx;
+    if (!inst) inst = g_v1_instance;
+    if (!inst) return;
+
+    const int clear_all = (!source_id || source_id[0] == '\0');
+    for (int i = 0; i < inst->mod_target_count && i < MAX_MOD_TARGETS; i++) {
+        mod_target_state_t *entry = &inst->mod_targets[i];
+        if (!entry->active) continue;
+        if (!clear_all && strcmp(entry->source_id, source_id) != 0) continue;
+
+        memset(entry, 0, sizeof(*entry));
+    }
 }
 
 /* Forward declarations for v2 helper functions */
