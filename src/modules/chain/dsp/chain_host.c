@@ -153,7 +153,7 @@ typedef struct {
 #define MAX_MOD_SOURCES 8
 #define MOD_PARAM_CACHE_REFRESH_MS 250
 #define MOD_FLOAT_CHANGE_EPSILON 0.000001f
-#define MOD_MINIJV_INT_MIN_INTERVAL_MS 50
+#define MOD_INT_ENUM_MIN_INTERVAL_MS 50
 
 /* Runtime modulation target state (non-destructive overlay). */
 typedef struct mod_target_state {
@@ -4261,10 +4261,8 @@ static void chain_mod_apply_effective_value(chain_instance_t *inst, mod_target_s
 
     uint64_t now_ms = 0;
     uint32_t min_interval_ms = 0;
-    if (strcmp(entry->target, "synth") == 0 &&
-        strcmp(inst->current_synth_module, "minijv") == 0 &&
-        (entry->type == KNOB_TYPE_INT || entry->type == KNOB_TYPE_ENUM)) {
-        min_interval_ms = MOD_MINIJV_INT_MIN_INTERVAL_MS;
+    if (entry->type == KNOB_TYPE_INT || entry->type == KNOB_TYPE_ENUM) {
+        min_interval_ms = MOD_INT_ENUM_MIN_INTERVAL_MS;
     }
 
     if (!force_write) {
