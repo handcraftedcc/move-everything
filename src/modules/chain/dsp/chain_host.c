@@ -152,6 +152,8 @@ typedef struct {
 #define MAX_MOD_TARGETS 32
 #define MAX_MOD_SOURCES 8
 #define MOD_PARAM_CACHE_REFRESH_MS 250
+#define MOD_FLOAT_CHANGE_EPSILON 0.000001f
+#define MOD_MINIJV_INT_BLOCK_DIVIDER 4
 
 /* Runtime modulation target state (non-destructive overlay). */
 typedef struct mod_target_state {
@@ -163,6 +165,9 @@ typedef struct mod_target_state {
     float base_value;
     float contribution;
     float effective_value;
+    float last_applied_value;
+    uint32_t apply_tick_counter;
+    int has_last_applied;
     float min_val;
     float max_val;
     knob_type_t type;
@@ -682,7 +687,7 @@ static void chain_mod_update_base_from_set_param(chain_instance_t *inst,
                                                  const char *target,
                                                  const char *param,
                                                  const char *val);
-static void chain_mod_apply_effective_value(chain_instance_t *inst, mod_target_state_t *entry);
+static void chain_mod_apply_effective_value(chain_instance_t *inst, mod_target_state_t *entry, int force_write);
 static void chain_mod_clear_target_entry(chain_instance_t *inst, mod_target_state_t *entry);
 static int chain_mod_get_base_for_subkey(chain_instance_t *inst,
                                          const char *target,
@@ -4249,10 +4254,33 @@ static void chain_mod_update_base_from_set_param(chain_instance_t *inst,
     entry->base_value = chain_mod_clampf(base, entry->min_val, entry->max_val);
 }
 
-static void chain_mod_apply_effective_value(chain_instance_t *inst, mod_target_state_t *entry) {
+static void chain_mod_apply_effective_value(chain_instance_t *inst, mod_target_state_t *entry, int force_write) {
     if (!inst || !entry || !entry->active) return;
 
     chain_mod_recompute_effective(entry);
+
+    if (!force_write) {
+        if (entry->has_last_applied) {
+            if (entry->type == KNOB_TYPE_INT || entry->type == KNOB_TYPE_ENUM) {
+                if ((int)entry->effective_value == (int)entry->last_applied_value) {
+                    return;
+                }
+            } else if (fabsf(entry->effective_value - entry->last_applied_value) < MOD_FLOAT_CHANGE_EPSILON) {
+                return;
+            }
+        }
+
+        if ((entry->type == KNOB_TYPE_INT || entry->type == KNOB_TYPE_ENUM) &&
+            strcmp(entry->target, "synth") == 0 &&
+            strcmp(inst->current_synth_module, "minijv") == 0) {
+            uint32_t tick = entry->apply_tick_counter++;
+            if ((tick % MOD_MINIJV_INT_BLOCK_DIVIDER) != 0) {
+                return;
+            }
+        } else {
+            entry->apply_tick_counter++;
+        }
+    }
 
     char val_str[32];
     if (entry->type == KNOB_TYPE_INT || entry->type == KNOB_TYPE_ENUM) {
@@ -4261,7 +4289,11 @@ static void chain_mod_apply_effective_value(chain_instance_t *inst, mod_target_s
         snprintf(val_str, sizeof(val_str), "%.6f", entry->effective_value);
     }
 
-    chain_mod_set_param_string(inst, entry->target, entry->param, val_str);
+    int rc = chain_mod_set_param_string(inst, entry->target, entry->param, val_str);
+    if (rc == 0) {
+        entry->last_applied_value = entry->effective_value;
+        entry->has_last_applied = 1;
+    }
 }
 
 static void chain_mod_clear_target_entry(chain_instance_t *inst, mod_target_state_t *entry) {
@@ -4270,7 +4302,7 @@ static void chain_mod_clear_target_entry(chain_instance_t *inst, mod_target_stat
     entry->enabled = 0;
     entry->contribution = 0.0f;
     entry->effective_value = entry->base_value;
-    chain_mod_apply_effective_value(inst, entry);
+    chain_mod_apply_effective_value(inst, entry, 1);
     memset(entry, 0, sizeof(*entry));
 
     while (inst->mod_target_count > 0 &&
@@ -4374,7 +4406,7 @@ static int chain_mod_emit_value(void *ctx,
     }
     float range_scale = bipolar ? (0.5f * range_span) : range_span;
     entry->contribution = ((mod_signal * depth) + offset) * range_scale;
-    chain_mod_apply_effective_value(inst, entry);
+    chain_mod_apply_effective_value(inst, entry, 0);
     return 0;
 }
 
@@ -6558,7 +6590,7 @@ static void v2_set_param(void *instance, const char *key, const char *val) {
                 chain_mod_update_base_from_set_param(inst, "synth", subkey, val);
                 mod_target_state_t *entry = chain_mod_find_target_entry(inst, "synth", subkey);
                 if (entry) {
-                    chain_mod_apply_effective_value(inst, entry);
+                    chain_mod_apply_effective_value(inst, entry, 0);
                     inst->dirty = 1;
                     return;
                 }
@@ -6594,7 +6626,7 @@ static void v2_set_param(void *instance, const char *key, const char *val) {
                 chain_mod_update_base_from_set_param(inst, "fx1", subkey, val);
                 mod_target_state_t *entry = chain_mod_find_target_entry(inst, "fx1", subkey);
                 if (entry) {
-                    chain_mod_apply_effective_value(inst, entry);
+                    chain_mod_apply_effective_value(inst, entry, 0);
                     inst->dirty = 1;
                     return;
                 }
@@ -6632,7 +6664,7 @@ static void v2_set_param(void *instance, const char *key, const char *val) {
                 chain_mod_update_base_from_set_param(inst, "fx2", subkey, val);
                 mod_target_state_t *entry = chain_mod_find_target_entry(inst, "fx2", subkey);
                 if (entry) {
-                    chain_mod_apply_effective_value(inst, entry);
+                    chain_mod_apply_effective_value(inst, entry, 0);
                     inst->dirty = 1;
                     return;
                 }
@@ -6674,7 +6706,7 @@ static void v2_set_param(void *instance, const char *key, const char *val) {
                 chain_mod_update_base_from_set_param(inst, "midi_fx1", subkey, val);
                 mod_target_state_t *entry = chain_mod_find_target_entry(inst, "midi_fx1", subkey);
                 if (entry) {
-                    chain_mod_apply_effective_value(inst, entry);
+                    chain_mod_apply_effective_value(inst, entry, 0);
                     inst->dirty = 1;
                     return;
                 }
@@ -6697,7 +6729,7 @@ static void v2_set_param(void *instance, const char *key, const char *val) {
                 chain_mod_update_base_from_set_param(inst, "midi_fx2", subkey, val);
                 mod_target_state_t *entry = chain_mod_find_target_entry(inst, "midi_fx2", subkey);
                 if (entry) {
-                    chain_mod_apply_effective_value(inst, entry);
+                    chain_mod_apply_effective_value(inst, entry, 0);
                     inst->dirty = 1;
                     return;
                 }
