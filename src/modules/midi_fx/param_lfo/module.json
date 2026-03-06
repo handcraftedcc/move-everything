@@ -90,7 +90,7 @@
               "default": ""
             }
           ],
-          "knobs": ["enable", "waveform", "rate_hz", "depth"]
+          "knobs": ["rate_hz", "depth", "phase", "offset"]
         }
       }
     }
