@@ -1249,6 +1249,8 @@ let hierEditorParams = [];        // current level's params
 let hierEditorKnobs = [];         // current level's knob-mapped params
 let hierEditorSelectedIdx = 0;
 let hierEditorEditMode = false;   // true when editing a param value
+let hierEditorEditKey = "";       // full key currently being edited
+let hierEditorEditValue = null;   // stable value during edit mode
 let hierEditorChainParams = [];   // metadata from chain_params
 
 /* Master FX flag - when true, exit returns to MASTER_FX view instead of CHAIN_EDIT */
@@ -5369,6 +5371,7 @@ function enterHierarchyEditor(slotIndex, componentKey) {
     hierEditorChildLabel = "";
     hierEditorSelectedIdx = 0;
     hierEditorEditMode = false;
+    resetHierarchyEditState();
     hierEditorIsMasterFx = false;
     hierEditorMasterFxSlot = -1;
     filepathBrowserState = null;
@@ -5438,6 +5441,7 @@ function enterMasterFxHierarchyEditor(fxSlot) {
     hierEditorChildLabel = "";
     hierEditorSelectedIdx = 0;
     hierEditorEditMode = false;
+    resetHierarchyEditState();
     hierEditorIsMasterFx = true;
     hierEditorMasterFxSlot = fxSlot;
 
@@ -5629,6 +5633,7 @@ function exitHierarchyEditor() {
     hierEditorChildLabel = "";
     hierEditorIsPresetLevel = false;
     hierEditorPresetEditMode = false;
+    resetHierarchyEditState();
     hierEditorIsMasterFx = false;
     hierEditorMasterFxSlot = -1;
     filepathBrowserState = null;
@@ -5774,6 +5779,22 @@ function buildHierarchyParamKey(key) {
     return `${prefix}:${key}`;
 }
 
+function resetHierarchyEditState() {
+    hierEditorEditKey = "";
+    hierEditorEditValue = null;
+}
+
+function beginHierarchyParamEdit(key) {
+    const fullKey = buildHierarchyParamKey(key);
+    const baseVal = getSlotParam(hierEditorSlot, `${fullKey}:base`);
+    const liveVal = getSlotParam(hierEditorSlot, fullKey);
+    if (baseVal === null && liveVal === null) return false;
+
+    hierEditorEditKey = fullKey;
+    hierEditorEditValue = (baseVal !== null) ? baseVal : liveVal;
+    return true;
+}
+
 /* Adjust selected param value via jog */
 function adjustHierSelectedParam(delta) {
     if (hierEditorSelectedIdx >= hierEditorParams.length) return;
@@ -5786,7 +5807,10 @@ function adjustHierSelectedParam(delta) {
     if (key === SWAP_MODULE_ACTION) return;
     const fullKey = buildHierarchyParamKey(key);
 
-    const currentVal = getSlotParam(hierEditorSlot, fullKey);
+    const usingStableEditVal = hierEditorEditMode &&
+                               hierEditorEditKey === fullKey &&
+                               hierEditorEditValue !== null;
+    const currentVal = usingStableEditVal ? String(hierEditorEditValue) : getSlotParam(hierEditorSlot, fullKey);
     if (currentVal === null) return;
 
     const meta = getParamMetadata(key);
@@ -5800,7 +5824,11 @@ function adjustHierSelectedParam(delta) {
         let newIndex = currentIndex + delta;
         if (newIndex < 0) newIndex = meta.options.length - 1;
         if (newIndex >= meta.options.length) newIndex = 0;
-        setSlotParam(hierEditorSlot, fullKey, meta.options[newIndex]);
+        const newVal = meta.options[newIndex];
+        setSlotParam(hierEditorSlot, fullKey, newVal);
+        if (usingStableEditVal) {
+            hierEditorEditValue = newVal;
+        }
         return;
     }
 
@@ -5815,7 +5843,11 @@ function adjustHierSelectedParam(delta) {
     const max = meta && typeof meta.max === "number" ? meta.max : 1;
 
     const newVal = Math.max(min, Math.min(max, num + delta * step));
-    setSlotParam(hierEditorSlot, fullKey, formatParamForSet(newVal, meta));
+    const formatted = formatParamForSet(newVal, meta);
+    setSlotParam(hierEditorSlot, fullKey, formatted);
+    if (usingStableEditVal) {
+        hierEditorEditValue = formatted;
+    }
 }
 
 /*
@@ -6931,7 +6963,9 @@ function handleJog(delta) {
                     const param = hierEditorParams[hierEditorSelectedIdx];
                     const key = typeof param === "string" ? param : param.key || param;
                     const fullKey = buildHierarchyParamKey(key);
-                    const freshVal = getSlotParam(hierEditorSlot, fullKey);
+                    const freshVal = (hierEditorEditKey === fullKey && hierEditorEditValue !== null)
+                        ? String(hierEditorEditValue)
+                        : getSlotParam(hierEditorSlot, fullKey);
                     const displayVal = freshVal !== null ? formatHierDisplayValue(key, freshVal) : "";
                     announceParameter(param.label || key, displayVal);
                 }
@@ -7611,7 +7645,14 @@ function handleSelect() {
                     if (!hierEditorEditMode && meta && meta.type === "filepath") {
                         openHierarchyFilepathBrowser(selectedKey, meta);
                     } else {
-                        hierEditorEditMode = !hierEditorEditMode;
+                        if (!hierEditorEditMode) {
+                            if (beginHierarchyParamEdit(selectedKey)) {
+                                hierEditorEditMode = true;
+                            }
+                        } else {
+                            hierEditorEditMode = false;
+                            resetHierarchyEditState();
+                        }
                     }
                 }
             }
@@ -8097,6 +8138,7 @@ function handleBack() {
             if (hierEditorEditMode) {
                 /* Exit param edit mode first */
                 hierEditorEditMode = false;
+                resetHierarchyEditState();
                 needsRedraw = true;
                 announceHierLevel();
             } else if (hierEditorPresetEditMode) {

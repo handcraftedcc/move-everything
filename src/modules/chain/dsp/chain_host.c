@@ -677,6 +677,11 @@ static void chain_mod_update_base_from_set_param(chain_instance_t *inst,
                                                  const char *param,
                                                  const char *val);
 static void chain_mod_apply_effective_value(chain_instance_t *inst, mod_target_state_t *entry);
+static int chain_mod_get_base_for_subkey(chain_instance_t *inst,
+                                         const char *target,
+                                         const char *subkey,
+                                         char *buf,
+                                         int buf_len);
 
 /* Plugin API we return to host */
 static plugin_api_v1_t g_plugin_api;
@@ -4204,6 +4209,39 @@ static void chain_mod_apply_effective_value(chain_instance_t *inst, mod_target_s
     chain_mod_set_param_string(inst, entry->target, entry->param, val_str);
 }
 
+/* Optional getter helper: key suffix ':base' returns non-modulated base value.
+ * Example: 'synth:cutoff:base' -> base cutoff while modulation is active. */
+static int chain_mod_get_base_for_subkey(chain_instance_t *inst,
+                                         const char *target,
+                                         const char *subkey,
+                                         char *buf,
+                                         int buf_len) {
+    if (!inst || !target || !subkey || !buf || buf_len < 2) return -1;
+
+    const size_t suffix_len = 5; /* ":base" */
+    const size_t subkey_len = strlen(subkey);
+    if (subkey_len <= suffix_len || strcmp(subkey + subkey_len - suffix_len, ":base") != 0) {
+        return -1;
+    }
+
+    char param[64];
+    const size_t param_len = subkey_len - suffix_len;
+    if (param_len == 0 || param_len >= sizeof(param)) return -1;
+    memcpy(param, subkey, param_len);
+    param[param_len] = '\0';
+
+    mod_target_state_t *entry = chain_mod_find_target_entry(inst, target, param);
+    if (entry && entry->active) {
+        if (entry->type == KNOB_TYPE_INT || entry->type == KNOB_TYPE_ENUM) {
+            return snprintf(buf, buf_len, "%d", (int)entry->base_value);
+        }
+        return snprintf(buf, buf_len, "%.6f", entry->base_value);
+    }
+
+    /* If not modulated, return current plugin value for compatibility. */
+    return chain_mod_get_param_string(inst, target, param, buf, buf_len);
+}
+
 /* Runtime modulation callback (initial stateful implementation).
  * Applies non-destructive contribution math and stores effective values. */
 static int chain_mod_emit_value(void *ctx,
@@ -7043,6 +7081,8 @@ static int v2_get_param(void *instance, const char *key, char *buf, int buf_len)
     /* Route synth: prefixed params to synth (strip prefix) */
     if (strncmp(key, "synth:", 6) == 0) {
         const char *subkey = key + 6;
+        int base_result = chain_mod_get_base_for_subkey(inst, "synth", subkey, buf, buf_len);
+        if (base_result >= 0) return base_result;
 
         /* Return synth's default forward channel from module.json capabilities */
         if (strcmp(subkey, "default_forward_channel") == 0) {
@@ -7108,6 +7148,8 @@ static int v2_get_param(void *instance, const char *key, char *buf, int buf_len)
     /* Route fx1: prefixed params to FX1 (strip prefix) */
     if (strncmp(key, "fx1:", 4) == 0) {
         const char *subkey = key + 4;
+        int base_result = chain_mod_get_base_for_subkey(inst, "fx1", subkey, buf, buf_len);
+        if (base_result >= 0) return base_result;
 
         /* For chain_params: try plugin first, fall back to parsed module.json data */
         if (strcmp(subkey, "chain_params") == 0 && inst->fx_count > 0) {
@@ -7170,6 +7212,8 @@ static int v2_get_param(void *instance, const char *key, char *buf, int buf_len)
     /* Route fx2: prefixed params to FX2 (strip prefix) */
     if (strncmp(key, "fx2:", 4) == 0) {
         const char *subkey = key + 4;
+        int base_result = chain_mod_get_base_for_subkey(inst, "fx2", subkey, buf, buf_len);
+        if (base_result >= 0) return base_result;
 
         /* For chain_params: try plugin first, fall back to parsed module.json data */
         if (strcmp(subkey, "chain_params") == 0 && inst->fx_count > 1) {
@@ -7232,6 +7276,8 @@ static int v2_get_param(void *instance, const char *key, char *buf, int buf_len)
     /* Route midi_fx1: prefixed params to MIDI FX1 (strip prefix) */
     if (strncmp(key, "midi_fx1:", 9) == 0) {
         const char *subkey = key + 9;
+        int base_result = chain_mod_get_base_for_subkey(inst, "midi_fx1", subkey, buf, buf_len);
+        if (base_result >= 0) return base_result;
         /* For ui_hierarchy: return cached JSON from module.json */
         if (strcmp(subkey, "ui_hierarchy") == 0 && inst->midi_fx_count > 0) {
             if (inst->midi_fx_ui_hierarchy[0][0]) {
@@ -7296,6 +7342,8 @@ static int v2_get_param(void *instance, const char *key, char *buf, int buf_len)
     /* Route midi_fx2: prefixed params to MIDI FX2 (strip prefix) */
     if (strncmp(key, "midi_fx2:", 9) == 0) {
         const char *subkey = key + 9;
+        int base_result = chain_mod_get_base_for_subkey(inst, "midi_fx2", subkey, buf, buf_len);
+        if (base_result >= 0) return base_result;
         /* For ui_hierarchy: return cached JSON from module.json */
         if (strcmp(subkey, "ui_hierarchy") == 0 && inst->midi_fx_count > 1) {
             if (inst->midi_fx_ui_hierarchy[1][0]) {
