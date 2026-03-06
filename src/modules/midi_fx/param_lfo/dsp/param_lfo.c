@@ -17,6 +17,9 @@
 #define M_PI 3.14159265358979323846
 #endif
 
+/* Emit modulation at control-rate to reduce expensive per-block target writes. */
+#define MOD_EMIT_EVERY_N_BLOCKS 2
+
 typedef enum {
     WAVE_SINE = 0,
     WAVE_TRIANGLE,
@@ -45,6 +48,7 @@ typedef struct {
     float random_hold_value;
     float drunk_start_value;
     float drunk_target_value;
+    unsigned int block_tick_count;
 } param_lfo_instance_t;
 
 static const host_api_v1_t *g_host = NULL;
@@ -348,8 +352,6 @@ static int param_lfo_tick(void *instance,
         return 0;
     }
 
-    float sample = compute_lfo_sample(inst);
-
     float phase_inc = (inst->rate_hz * waveform_rate_multiplier(inst)) *
                       ((float)frames / (float)sample_rate);
     float new_phase = inst->phase + phase_inc;
@@ -358,6 +360,15 @@ static int param_lfo_tick(void *instance,
     for (int i = 0; i < wraps; i++) {
         advance_wave_cycle_state(inst);
     }
+
+    /* Throttle modulation writes while keeping phase progression full-rate. */
+    if ((inst->block_tick_count % MOD_EMIT_EVERY_N_BLOCKS) != 0) {
+        inst->block_tick_count++;
+        return 0;
+    }
+    inst->block_tick_count++;
+
+    float sample = compute_lfo_sample(inst);
 
     int rc = g_host->mod_emit_value(g_host->mod_host_ctx,
                                     inst->source_id,
