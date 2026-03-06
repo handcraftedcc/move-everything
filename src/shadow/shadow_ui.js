@@ -5358,6 +5358,7 @@ function enterHierarchyEditor(slotIndex, componentKey) {
 
     /* Dismiss any active overlay and clear pending knob state */
     hideOverlay();
+    invalidateKnobContextCache();
     pendingHierKnobIndex = -1;
     pendingHierKnobDelta = 0;
 
@@ -5424,6 +5425,7 @@ function enterMasterFxHierarchyEditor(fxSlot) {
 
     /* Dismiss any active overlay and clear pending knob state */
     hideOverlay();
+    invalidateKnobContextCache();
     pendingHierKnobIndex = -1;
     pendingHierKnobDelta = 0;
 
@@ -6083,7 +6085,7 @@ function rebuildKnobContextCache() {
     }
     cachedKnobContextsView = view;
     cachedKnobContextsSlot = (view === VIEWS.HIERARCHY_EDITOR) ? hierEditorSlot : selectedSlot;
-    cachedKnobContextsComp = (view === VIEWS.HIERARCHY_EDITOR) ? -1 : selectedChainComponent;
+    cachedKnobContextsComp = (view === VIEWS.HIERARCHY_EDITOR) ? hierEditorComponent : selectedChainComponent;
     cachedKnobContextsLevel = (view === VIEWS.HIERARCHY_EDITOR) ? hierEditorLevel : "";
     cachedKnobContextsChildIndex = (view === VIEWS.HIERARCHY_EDITOR) ? hierEditorChildIndex : -1;
 }
@@ -6098,7 +6100,7 @@ let cachedKnobContextsMasterFxComp = -1;  /* Track Master FX component for cache
 function getKnobContext(knobIndex) {
     /* Check if cache is valid */
     const currentSlot = (view === VIEWS.HIERARCHY_EDITOR) ? hierEditorSlot : selectedSlot;
-    const currentComp = (view === VIEWS.HIERARCHY_EDITOR) ? -1 : selectedChainComponent;
+    const currentComp = (view === VIEWS.HIERARCHY_EDITOR) ? hierEditorComponent : selectedChainComponent;
     const currentLevel = (view === VIEWS.HIERARCHY_EDITOR) ? hierEditorLevel : "";
     const currentChildIndex = (view === VIEWS.HIERARCHY_EDITOR) ? hierEditorChildIndex : -1;
     const currentMasterFxComp = (view === VIEWS.MASTER_FX) ? selectedMasterFxComponent : -1;
