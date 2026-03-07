@@ -59,6 +59,10 @@ if ! rg -q 'getNumericParamsForTarget\(slot, target, numericOnly' "$file"; then
   echo "FAIL: parameter picker is missing metadata-based param filtering" >&2
   exit 1
 fi
+if rg -q 'endsWith\("_target_param"\)' "$file" || rg -q 'endsWith\("_target_component"\)' "$file"; then
+  echo "FAIL: picker still relies on naming-convention fallback" >&2
+  exit 1
+fi
 if ! rg -q '\$\{childPrefix\}\$\{i\}_\$\{key\}' "$file"; then
   echo "FAIL: picker does not expand child-prefixed parameter keys" >&2
   exit 1

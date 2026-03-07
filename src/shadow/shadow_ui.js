@@ -5095,20 +5095,12 @@ function inferLinkedTargetComponentKey(paramKey, meta) {
     if (meta && typeof meta.target_key === "string" && meta.target_key.trim()) {
         return meta.target_key.trim();
     }
-    if (paramKey === "target_param") return "target_component";
-    if (typeof paramKey === "string" && paramKey.endsWith("_target_param")) {
-        return `${paramKey.slice(0, -"_target_param".length)}_target_component`;
-    }
     return "";
 }
 
 function inferLinkedTargetParamKey(componentKey, meta) {
     if (meta && typeof meta.param_key === "string" && meta.param_key.trim()) {
         return meta.param_key.trim();
-    }
-    if (componentKey === "target_component") return "target_param";
-    if (typeof componentKey === "string" && componentKey.endsWith("_target_component")) {
-        return `${componentKey.slice(0, -"_target_component".length)}_target_param`;
     }
     return "";
 }
@@ -6010,6 +6002,10 @@ function beginHierarchyParamEdit(key) {
     return true;
 }
 
+function shouldRefreshDynamicRateMeta(key) {
+    return typeof key === "string" && /_rate_mode$/.test(key);
+}
+
 /* Adjust selected param value via jog */
 function adjustHierSelectedParam(delta) {
     if (hierEditorSelectedIdx >= hierEditorParams.length) return;
@@ -6043,6 +6039,10 @@ function adjustHierSelectedParam(delta) {
         setSlotParam(hierEditorSlot, fullKey, newVal);
         if (usingStableEditVal) {
             hierEditorEditValue = newVal;
+        }
+        if (shouldRefreshDynamicRateMeta(key)) {
+            refreshHierarchyChainParams();
+            invalidateKnobContextCache();
         }
         return;
     }
@@ -6486,6 +6486,10 @@ function processPendingHierKnob() {
         if (newIndex >= ctx.meta.options.length) newIndex = ctx.meta.options.length - 1;
         const newVal = ctx.meta.options[newIndex];
         setSlotParam(ctx.slot, ctx.fullKey, newVal);
+        if (shouldRefreshDynamicRateMeta(ctx.key)) {
+            refreshHierarchyChainParams();
+            invalidateKnobContextCache();
+        }
         showOverlay(ctx.title, newVal);
         return;
     }

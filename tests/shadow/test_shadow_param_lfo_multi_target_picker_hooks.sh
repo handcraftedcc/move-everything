@@ -11,20 +11,8 @@ if ! rg -q 'function inferLinkedTargetParamKey' "$file"; then
   echo "FAIL: missing generic linked param_key resolver" >&2
   exit 1
 fi
-if ! rg -q 'endsWith\("_target_param"\)' "$file"; then
-  echo "FAIL: linked target resolver does not recognize suffixed _target_param keys" >&2
-  exit 1
-fi
-if ! rg -q 'endsWith\("_target_component"\)' "$file"; then
-  echo "FAIL: linked param resolver does not recognize suffixed _target_component keys" >&2
-  exit 1
-fi
-if ! rg -q 'paramKey === "target_param"' "$file"; then
-  echo "FAIL: linked target resolver does not handle base target_param key" >&2
-  exit 1
-fi
-if ! rg -q 'componentKey === "target_component"' "$file"; then
-  echo "FAIL: linked param resolver does not handle base target_component key" >&2
+if rg -q 'endsWith\("_target_param"\)' "$file" || rg -q 'endsWith\("_target_component"\)' "$file"; then
+  echo "FAIL: linked resolver still depends on naming conventions" >&2
   exit 1
 fi
 if ! rg -q 'meta.target_key' "$file"; then
@@ -40,4 +28,4 @@ if ! rg -q 'numeric_only' "$file"; then
   exit 1
 fi
 
-echo "PASS: shadow dynamic picker link resolution supports suffixed target key pairs"
+echo "PASS: shadow dynamic picker link resolution is metadata-driven"

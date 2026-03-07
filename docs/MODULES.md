@@ -695,7 +695,7 @@ int get_param(void *instance, const char *key, char *buf, int buf_len) {
 | `float` | `min`, `max`, `default`/`value` | Float value |
 | `enum` | `options`, `default`/`value` | List of string options |
 | `filepath` | `root`, `start_path`, `filter`, `default`/`value` | Opens Shadow UI file browser and stores selected path |
-| `module_picker` | `allow_none`, `allow_self`, `allowed_targets` | Dynamic enum from loaded chain components |
+| `module_picker` | `allow_none`, `allow_self`, `allowed_targets`, `param_key` | Dynamic enum from loaded chain components |
 | `parameter_picker` | `target_key`, `numeric_only`, `allow_none` | Dynamic enum from selected target's exposed params |
 
 #### `filepath` in module.json
@@ -752,7 +752,8 @@ Use `module_picker` and `parameter_picker` for chain-aware target routing withou
 - `allow_none` (optional, default true): Includes an empty option for clearing assignment.
 - `allow_self` (module_picker only, optional, default false): Allows selecting the hosting component itself.
 - `allowed_targets` (module_picker only, optional): Comma-separated string or array of target IDs to whitelist.
-- `target_key` (parameter_picker, optional): Companion key holding selected module target; defaults to paired `*_target_component` for `*_target_param`.
+- `param_key` (module_picker, optional): Companion parameter key to clear when target changes (for example `lfo1_target_param`).
+- `target_key` (parameter_picker, recommended): Companion key holding selected module target.
 - `numeric_only` (parameter_picker, optional, default true): Restricts options to float/int parameters.
 
 These map to knobs 1-8 in the Shadow UI for quick access.
