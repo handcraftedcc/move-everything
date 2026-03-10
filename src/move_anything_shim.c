@@ -2008,9 +2008,9 @@ static int shadow_inject_midi_to_move_packet(const uint8_t pkt[4], int *insert_s
     }
 
     /* In external-source injection mode, avoid adding packets when native MIDI
-     * already occupies 2+ leading slots. This prevents interleaving patterns
+     * already occupies any leading slot. This prevents interleaving patterns
      * that can trip Move's event-order assertion. */
-    if (shadow_external_inject_mode_enabled && search_start > 4) {
+    if (shadow_external_inject_mode_enabled && search_start > 0) {
         if (dbg) dbg->chosen_pass = -2;  /* Busy/interleave guard */
         return 2;
     }
@@ -2181,11 +2181,9 @@ static void shadow_drain_midi_to_move_queue(void)
 
         int insert_rc = shadow_inject_midi_to_move_packet(pkt, &last_insert_slot, &last_insert_dbg);
         if (insert_rc == 2) {
-            shadow_midi_to_move_dropped_count++;
-            duplicate_drops++;
-            interleave_drops++;
-            read_idx++;
-            continue;
+            /* Preserve queue order under native-prefix occupancy.
+             * Keep packet queued and retry on next cycle instead of dropping. */
+            break;
         }
 
         if (!insert_rc) {
