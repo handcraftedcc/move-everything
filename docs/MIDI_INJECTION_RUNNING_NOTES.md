@@ -582,3 +582,45 @@ Purpose: append-only notes for debugging `midi_to_move` injection stability in `
 - `tests/host/test_chain_midi_exec_before.sh` PASS
 - `tests/shadow/test_shadow_midi_exec_before_wiring.sh` PASS
 - `tests/shadow/test_midi_to_move_injection_stability.sh` PASS
+
+## 2026-03-10 (before-mode routing hardening: cable 0 replacement)
+
+### Change implemented
+- In internal-only `midi_exec_before` mode, shim reinjection now forces cable `0` (replace-in-place semantics) instead of forcing cable `2`.
+- This keeps transformed internal notes on the same cable path expected by Move while still using guarded queue injection.
+
+### Verification
+- `tests/shadow/test_midi_to_move_injection_stability.sh` PASS (asserts internal-only before mode selects cable 0)
+- `tests/host/test_chain_midi_exec_before.sh` PASS
+- `tests/shadow/test_shadow_midi_exec_before_wiring.sh` PASS
+
+## 2026-03-10 (before-mode routing hardening: pad scope + internal realtime)
+
+### Change implemented
+- Restricted before-mode interception to pad grid notes only (`68..99`); non-pad events are no longer blocked/replaced.
+- Added explicit internal realtime (`0xF8/0xFA/0xFB/0xFC`) forwarding from cable 0 to active `midi_exec_before` slots (`MOVE_MIDI_SOURCE_INTERNAL`) so MIDI FX can see clock/start/stop in before mode.
+
+### Verification
+- `tests/shadow/test_shadow_midi_exec_before_wiring.sh` PASS (pad filter + internal realtime forwarding assertions)
+- `tests/shadow/test_midi_to_move_injection_stability.sh` PASS
+- `tests/host/test_chain_midi_exec_before.sh` PASS
+
+## 2026-03-10 (before-mode transport de-dup in shim)
+
+### Evidence observed
+- Realtime logs showed both internal and external transport paths active during before-mode repro windows:
+  - `rt-stop observed status=0xFC cable=0 path=internal-before-slots`
+  - `rt-stop observed status=0xFC cable=2 path=external-to-slots`
+- This matched duplicate Start/Stop patterns previously seen in SuperArp logs and pointed to duplicate transport fanout as a reset risk.
+
+### Change implemented
+- In shim realtime fanout for cable 2, skip slots where `slot->midi_exec_before` is enabled.
+- Before-mode slots now receive realtime only from the internal cable-0 forwarding path, removing duplicate transport delivery without requiring MIDI-FX modules to implement custom timing guards.
+
+### Verification
+- `tests/shadow/test_shadow_midi_exec_before_wiring.sh` PASS (asserts `if (slot->midi_exec_before) continue`)
+- `tests/shadow/test_midi_to_move_injection_stability.sh` PASS
+- `tests/host/test_chain_midi_exec_before.sh` PASS
+- Built and installed to hardware:
+  - `/bin/zsh -lc 'PATH=/opt/homebrew/bin:$PATH ./scripts/build.sh'`
+  - `/bin/zsh -lc 'PATH=/opt/homebrew/bin:$PATH ./scripts/install.sh local --skip-confirmation --skip-modules'`

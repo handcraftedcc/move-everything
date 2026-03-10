@@ -694,10 +694,13 @@ static void shadow_inprocess_process_midi(void) {
                 /* External cable 2 realtime still fans out to all active slots. */
                 if (cable == 2) {
                     for (int s = 0; s < SHADOW_CHAIN_INSTANCES; s++) {
-                        if (shadow_chain_slots[s].active && shadow_chain_slots[s].instance) {
-                            shadow_plugin_v2->on_midi(shadow_chain_slots[s].instance, msg, 1,
+                        shadow_chain_slot_t *slot = &shadow_chain_slots[s];
+                        if (!slot->active || !slot->instance) continue;
+                        /* Midi Exec=Before slots use internal realtime path only.
+                         * Skipping cable-2 realtime avoids duplicate Start/Stop/Clock. */
+                        if (slot->midi_exec_before) continue;
+                        shadow_plugin_v2->on_midi(slot->instance, msg, 1,
                                                       MOVE_MIDI_SOURCE_EXTERNAL);
-                        }
                     }
                 }
 

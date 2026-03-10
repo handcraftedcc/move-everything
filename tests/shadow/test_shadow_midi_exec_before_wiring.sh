@@ -72,5 +72,9 @@ if ! echo "$rt_ctx" | rg -q "MOVE_MIDI_SOURCE_INTERNAL"; then
   echo "FAIL: internal realtime forward must use internal source tag" >&2
   exit 1
 fi
+if ! echo "$rt_ctx" | rg -q "if \\(slot->midi_exec_before\\) continue"; then
+  echo "FAIL: external realtime fanout should skip midi_exec_before slots to avoid duplicate transport" >&2
+  exit 1
+fi
 
 echo "PASS: shadow midi_exec before wiring present"
