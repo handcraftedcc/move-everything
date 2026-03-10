@@ -45,6 +45,29 @@ Purpose: append-only notes for debugging `midi_to_move` injection stability in `
 - `tests/shadow/test_midi_to_move_injection_stability.sh`: PASS (updated to assert internal-flag plumbing + internal guard activation)
 - Full build: PASS (`./scripts/build.sh`)
 
+## 2026-03-10 (internal-mode dropout investigation)
+
+### Evidence observed
+- In `source_mode=internal`, users observed playback stopping after ~1-2s while arp/held notes were active.
+- Shim diagnostics during repro showed healthy injector behavior (`inj` events present, `full=0`, `busy_drop=0`, no assertion spikes in sampled window).
+- `midi_inject_test.log` showed repeated `drop reason=source src=2 mode=internal` (including note status), indicating source-filter mismatch upstream.
+
+### Root cause
+- Chain v1 path applies source gating via input mode before forwarding to synth.
+- Chain v2 path (`v2_on_midi`) did not apply equivalent per-instance source gating before MIDI FX processing.
+- Result: feedback/external-tagged events could still perturb arp/held-note state in internal-mode workflows.
+
+### Change implemented
+- Added per-instance source-gate helper in chain v2 path:
+  - allow `MOVE_MIDI_SOURCE_HOST`
+  - enforce `MIDI_INPUT_PADS` => internal only
+  - enforce `MIDI_INPUT_EXTERNAL` => external only
+- Applied gate in `v2_on_midi` before MIDI FX processing.
+
+### Verification
+- Added host regression test: `tests/host/test_chain_v2_midi_source_gate.sh` (PASS)
+- Existing guard test: `tests/shadow/test_midi_to_move_injection_stability.sh` (PASS)
+
 ## Notes format for next entries
 - `Date`
 - `Evidence observed`

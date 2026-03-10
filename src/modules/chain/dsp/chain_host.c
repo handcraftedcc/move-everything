@@ -5705,6 +5705,22 @@ static void inst_send_note_to_synth(chain_instance_t *inst, const uint8_t *msg, 
     }
 }
 
+static int inst_midi_source_allowed(const chain_instance_t *inst, int source)
+{
+    if (!inst) return 0;
+    if (source == MOVE_MIDI_SOURCE_HOST) return 1;
+
+    if (inst->midi_input == MIDI_INPUT_PADS) {
+        return source == MOVE_MIDI_SOURCE_INTERNAL;
+    }
+
+    if (inst->midi_input == MIDI_INPUT_EXTERNAL) {
+        return source == MOVE_MIDI_SOURCE_EXTERNAL;
+    }
+
+    return 1;
+}
+
 /* V2 on_midi handler */
 static void v2_on_midi(void *instance, const uint8_t *msg, int len, int source) {
     chain_instance_t *inst = (chain_instance_t *)instance;
@@ -5831,6 +5847,8 @@ static void v2_on_midi(void *instance, const uint8_t *msg, int len, int source) 
             }
         }
     }
+
+    if (!inst_midi_source_allowed(inst, source)) return;
 
     /* Process through MIDI FX modules (if any loaded) */
     uint8_t out_msgs[MIDI_FX_MAX_OUT_MSGS][3];
@@ -7001,5 +7019,4 @@ void chain_process_fx(void *instance, int16_t *buf, int frames) {
         }
     }
 }
-
 
