@@ -207,3 +207,21 @@ Purpose: append-only notes for debugging `midi_to_move` injection stability in `
 ### Open questions
 - Which exact MIDI status/source combination is triggering `MIDI Stop (internal)` in the superarp path during this setup?
 - Is this caused by internal transport forwarding, feedback path events when `input=both`, or superarp internal sync logic?
+
+## 2026-03-10 (shim probe for external transport-stop packets)
+
+### Evidence observed
+- Superarp receives `MIDI Stop (internal)` events, but existing logs did not include packet cable/source at shim ingress.
+
+### Change implemented
+- Added temporary shim debug probe in `shadow_inprocess_process_midi`:
+  - logs every incoming realtime `0xFC` packet with cable ID
+  - distinguishes `cable=2` (`path=external-to-slots`) from non-external cables (`path=ignored-non-external`)
+
+### Verification
+- Pending hardware repro with updated build; expected debug lines:
+  - `rt-stop observed status=0xFC cable=2 path=external-to-slots`
+  - or non-external variants for cable 0/1.
+
+### Open questions
+- During the next dropout window, do `0xFC` packets appear on cable 2 right before superarp stop/reset events?

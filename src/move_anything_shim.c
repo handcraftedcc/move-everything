@@ -672,6 +672,18 @@ static void shadow_inprocess_process_midi(void) {
         /* Handle system realtime messages (CIN=0x0F): clock, start, continue, stop
          * These are 1-byte messages that should be broadcast to ALL active slots */
         if (cin == 0x0F && status_usb >= 0xF8 && status_usb <= 0xFF) {
+            if (status_usb == 0xFC) {
+                if (cable == 2) {
+                    unified_log("shim", LOG_LEVEL_DEBUG,
+                                "rt-stop observed status=0xFC cable=%u path=external-to-slots",
+                                (unsigned)cable);
+                } else {
+                    unified_log("shim", LOG_LEVEL_DEBUG,
+                                "rt-stop observed status=0xFC cable=%u path=ignored-non-external",
+                                (unsigned)cable);
+                }
+            }
+
             /* Sampler sees clock from cable 0 only (Move internal) to avoid double-counting */
             if (cable == 0) {
                 sampler_on_clock(status_usb);
