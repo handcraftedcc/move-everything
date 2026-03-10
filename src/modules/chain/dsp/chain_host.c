@@ -468,6 +468,19 @@ typedef struct chain_instance {
     /* When set, render_block outputs raw synth only (no inject mix, no FX).
      * The shim calls chain_process_fx() separately for same-frame FX. */
     int external_fx_mode;
+
+    /* V2 MIDI debug counters (aggregated, debug-only logging). */
+    uint64_t dbg_midi_window_start_ms;
+    uint32_t dbg_midi_in_note_edges;
+    uint32_t dbg_midi_in_clock;
+    uint32_t dbg_midi_blocked_source;
+    uint32_t dbg_midi_fx_zero_out;
+    uint32_t dbg_midi_out_note_edges;
+    uint32_t dbg_midi_out_msgs;
+    int dbg_midi_last_source;
+    uint8_t dbg_midi_last_status;
+    uint8_t dbg_midi_last_d1;
+    uint8_t dbg_midi_last_d2;
 } chain_instance_t;
 
 /* ============================================================================
@@ -643,6 +656,67 @@ static uint64_t get_time_ms(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (uint64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
+static int is_note_edge_status(uint8_t status, uint8_t d2)
+{
+    uint8_t type = (uint8_t)(status & 0xF0u);
+    if (type == 0x80u) return 1;
+    if (type == 0x90u) return 1;
+    (void)d2;
+    return 0;
+}
+
+static int v2_midi_debug_enabled(const chain_instance_t *inst)
+{
+    if (!inst) return 0;
+    return strcmp(inst->current_synth_module, "midi_inject_test") == 0;
+}
+
+static void v2_midi_debug_maybe_flush(chain_instance_t *inst, uint64_t now_ms)
+{
+    if (!inst) return;
+    if (!v2_midi_debug_enabled(inst)) return;
+
+    if (inst->dbg_midi_window_start_ms == 0) {
+        inst->dbg_midi_window_start_ms = now_ms;
+    }
+
+    if (now_ms - inst->dbg_midi_window_start_ms < 250u) return;
+
+    if (inst->dbg_midi_in_note_edges == 0 &&
+        inst->dbg_midi_in_clock == 0 &&
+        inst->dbg_midi_blocked_source == 0 &&
+        inst->dbg_midi_fx_zero_out == 0 &&
+        inst->dbg_midi_out_note_edges == 0 &&
+        inst->dbg_midi_out_msgs == 0) {
+        inst->dbg_midi_window_start_ms = now_ms;
+        return;
+    }
+
+    unified_log("chain", LOG_LEVEL_DEBUG,
+                "v2-midi synth=%s patch=%d midi_input=%d in_note=%u in_clk=%u blocked=%u fx_zero=%u out_note=%u out_msgs=%u last=src%d st=0x%02X d1=%u d2=%u",
+                inst->current_synth_module,
+                inst->current_patch,
+                (int)inst->midi_input,
+                inst->dbg_midi_in_note_edges,
+                inst->dbg_midi_in_clock,
+                inst->dbg_midi_blocked_source,
+                inst->dbg_midi_fx_zero_out,
+                inst->dbg_midi_out_note_edges,
+                inst->dbg_midi_out_msgs,
+                inst->dbg_midi_last_source,
+                inst->dbg_midi_last_status,
+                inst->dbg_midi_last_d1,
+                inst->dbg_midi_last_d2);
+
+    inst->dbg_midi_in_note_edges = 0;
+    inst->dbg_midi_in_clock = 0;
+    inst->dbg_midi_blocked_source = 0;
+    inst->dbg_midi_fx_zero_out = 0;
+    inst->dbg_midi_out_note_edges = 0;
+    inst->dbg_midi_out_msgs = 0;
+    inst->dbg_midi_window_start_ms = now_ms;
 }
 
 /* Calculate knob acceleration multiplier based on time between events */
@@ -5725,6 +5799,22 @@ static int inst_midi_source_allowed(const chain_instance_t *inst, int source)
 static void v2_on_midi(void *instance, const uint8_t *msg, int len, int source) {
     chain_instance_t *inst = (chain_instance_t *)instance;
     if (!inst || len < 1) return;
+    uint64_t now_ms = get_time_ms();
+    int debug_enabled = v2_midi_debug_enabled(inst);
+    uint8_t in_status = msg[0];
+    uint8_t in_d1 = (len > 1) ? msg[1] : 0;
+    uint8_t in_d2 = (len > 2) ? msg[2] : 0;
+    int in_note_edge = is_note_edge_status(in_status, in_d2);
+    int in_clock = (in_status == 0xF8u);
+
+    if (debug_enabled) {
+        if (in_note_edge) inst->dbg_midi_in_note_edges++;
+        if (in_clock) inst->dbg_midi_in_clock++;
+        inst->dbg_midi_last_source = source;
+        inst->dbg_midi_last_status = in_status;
+        inst->dbg_midi_last_d1 = in_d1;
+        inst->dbg_midi_last_d2 = in_d2;
+    }
 
     /* FX broadcast: forward only to audio FX with on_midi (e.g. ducker).
      * Skip synth, MIDI FX, and knob handling - this MIDI is from a
@@ -5735,6 +5825,7 @@ static void v2_on_midi(void *instance, const uint8_t *msg, int len, int source) 
                 inst->fx_on_midi[f](inst->fx_instances[f], msg, len, source);
             }
         }
+        v2_midi_debug_maybe_flush(inst, now_ms);
         return;
     }
 
@@ -5848,15 +5939,43 @@ static void v2_on_midi(void *instance, const uint8_t *msg, int len, int source) 
         }
     }
 
-    if (!inst_midi_source_allowed(inst, source)) return;
+    if (!inst_midi_source_allowed(inst, source)) {
+        if (debug_enabled) {
+            inst->dbg_midi_blocked_source++;
+            if (in_note_edge || in_clock) {
+                unified_log("chain", LOG_LEVEL_DEBUG,
+                            "v2-midi blocked synth=%s patch=%d midi_input=%d src=%d status=0x%02X d1=%u d2=%u",
+                            inst->current_synth_module,
+                            inst->current_patch,
+                            (int)inst->midi_input,
+                            source,
+                            in_status,
+                            in_d1,
+                            in_d2);
+            }
+        }
+        v2_midi_debug_maybe_flush(inst, now_ms);
+        return;
+    }
 
     /* Process through MIDI FX modules (if any loaded) */
     uint8_t out_msgs[MIDI_FX_MAX_OUT_MSGS][3];
     int out_lens[MIDI_FX_MAX_OUT_MSGS];
     int out_count = v2_process_midi_fx(inst, msg, len, out_msgs, out_lens, MIDI_FX_MAX_OUT_MSGS);
+    if (debug_enabled && in_note_edge && out_count == 0) {
+        inst->dbg_midi_fx_zero_out++;
+    }
 
     /* Send processed messages to synth */
     for (int i = 0; i < out_count; i++) {
+        if (debug_enabled) {
+            uint8_t out_status = out_msgs[i][0];
+            uint8_t out_d2 = (out_lens[i] > 2) ? out_msgs[i][2] : 0;
+            inst->dbg_midi_out_msgs++;
+            if (is_note_edge_status(out_status, out_d2)) {
+                inst->dbg_midi_out_note_edges++;
+            }
+        }
         if (inst->synth_plugin_v2 && inst->synth_instance && inst->synth_plugin_v2->on_midi) {
             inst->synth_plugin_v2->on_midi(inst->synth_instance, out_msgs[i], out_lens[i], source);
         } else if (inst->synth_plugin && inst->synth_plugin->on_midi) {
@@ -5872,6 +5991,8 @@ static void v2_on_midi(void *instance, const uint8_t *msg, int len, int source) 
             }
         }
     }
+
+    v2_midi_debug_maybe_flush(inst, now_ms);
 }
 
 /* V2 set_param handler */
@@ -7019,4 +7140,3 @@ void chain_process_fx(void *instance, int16_t *buf, int frames) {
         }
     }
 }
-

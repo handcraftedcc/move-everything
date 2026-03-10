@@ -148,3 +148,26 @@ Purpose: append-only notes for debugging `midi_to_move` injection stability in `
 
 ### Open questions
 - Whether source-tag mismatches (`src=2` while mode is internal) align exactly with audible gaps in the new verbose note-edge stream.
+
+## 2026-03-10 (chain v2 per-window MIDI path instrumentation)
+
+### Evidence observed
+- With shim and `midi_inject_test` verbose logs enabled, the injector path stayed healthy during intermittent audio dropouts:
+  - sustained internal note-edge forwarding
+  - no mailbox pressure (`busy_drop=0`, `full=0`)
+  - no duplicate suppression in internal-only mode
+- Intermittency persisted, implying drops are likely after ingress into chain v2 path (source gate / MIDI FX output / synth dispatch).
+
+### Change implemented
+- Added aggregated debug instrumentation in `src/modules/chain/dsp/chain_host.c` (`v2_on_midi`) guarded to `midi_inject_test` synth only:
+  - 250ms window counters for input note edges/clock, source-gate blocks, MIDI-FX zero-output events, and synth-bound output message counts.
+  - targeted `v2-midi blocked ...` logs for note-edge/clock packets rejected by source gating.
+  - periodic `v2-midi ...` summary lines to correlate ingress vs egress volume through the chain path.
+
+### Verification
+- `tests/shadow/test_midi_to_move_injection_stability.sh` PASS
+- `bash tests/host/test_chain_v2_midi_source_gate.sh` PASS
+
+### Open questions
+- During repro, do `v2-midi` window counters show input note-edge continuity while `out_note` falls to zero?
+- If yes, is the loss concentrated in source-gate blocks (`blocked`) or MIDI FX zero-output (`fx_zero`) windows?
