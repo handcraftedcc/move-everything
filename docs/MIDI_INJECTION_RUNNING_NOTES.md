@@ -417,3 +417,47 @@ Purpose: append-only notes for debugging `midi_to_move` injection stability in `
 ### Open questions
 - Do the newly added `v2-midi tick-gap` events align exactly with the audible short-burst stall windows?
 - If yes, what upstream scheduler/render path is delaying `v2_tick_midi_fx` servicing in this internal-mode setup?
+
+## 2026-03-10 (root cause isolated: shim idle gate throttles MIDI-FX tick)
+
+### Evidence observed
+- Fresh repro with `v2-midi tick-gap` probe:
+  - `/tmp/midi_debug/repro_20260310_142929/debug.log`
+  - `/tmp/midi_debug/repro_20260310_142929/midi_inject_test.log`
+  - `/tmp/midi_debug/repro_20260310_142929/superarp.log`
+- Core counters in this run:
+  - `debug_tick_gap=100`
+  - `debug_tick_silent=16`
+  - `debug_asserts=0`
+  - `debug_m2m_nonzero_drop=0`
+  - `debug_rt_transport=0`
+  - `superarp_stop_internal=0`
+- New probe output showed consistent render/tick gaps around half a second:
+  - `v2-midi tick-gap ... dt_ms=496/497/499 frames=128`
+  - distribution: `min=444ms`, `max=500ms`, `avg=494.7ms`
+- In the same window:
+  - `midi_inject_test` note-edge gaps remained ~`1.53s`-`1.68s`
+  - `superarp` `run_step emit` wall-time gaps matched those pauses.
+- Shim code review identified direct match:
+  - per-slot idle gate in `shadow_inprocess_generate_audio` skips `render_block` while idle, probing only every 172 frames (`~0.5s`), which aligns with observed `tick-gap` cadence.
+
+### Root cause
+- For slots with MIDI FX (e.g. SuperArp), `tick()` is driven by chain `render_block`.
+- The shim idle gate was using audio silence as a proxy for “safe to sleep” and skipping `render_block`, which starved MIDI-FX tick progression and produced intermittent burst/stall behavior.
+
+### Change implemented
+- In `src/move_anything_shim.c` idle-gate loop:
+  - query `midi_fx_count` per active chain slot via `shadow_plugin_v2->get_param(..., "midi_fx_count", ...)`
+  - if `midi_fx_count > 0`, force continuous render cadence for that slot:
+    - bypass idle-skip branch
+    - keep `shadow_slot_idle=0` / `shadow_slot_silence_frames=0`
+
+### Verification
+- `tests/shadow/test_midi_to_move_injection_stability.sh` PASS
+- `bash tests/host/test_chain_v2_midi_source_gate.sh` PASS
+- `bash tests/host/test_chain_midi_inject_prefx_guard.sh` PASS
+
+### Open questions
+- Hardware verify after this change:
+  - do `v2-midi tick-gap` lines disappear (or drop sharply) in the same internal-mode held-pad repro?
+  - do audible short-burst stalls stop with unchanged routing/settings?
