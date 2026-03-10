@@ -353,3 +353,29 @@ Purpose: append-only notes for debugging `midi_to_move` injection stability in `
 ### Current status after deploy
 - Broad `prefx block ... src=2 status=0xA0` lines are gone.
 - Internal-mode intermittency still reproduces (`v2-midi gap tick-silent ...`) and requires separate root-cause work in MIDI-FX/internal cadence path.
+
+## 2026-03-10 (direct SuperArp instrumentation run)
+
+### Change implemented
+- Built a temporary instrumented `superarp` module from `move-anything-superarp` and deployed `dsp.so` to:
+  - `/data/UserData/move-anything/modules/midi_fx/superarp/dsp.so`
+- Instrumentation enabled SuperArp internal `dlog(...)` and added explicit tick-path no-output diagnostics:
+  - `tick no-output sync=internal ...`
+  - `tick no-output sync=clock ...`
+
+### Repro evidence
+- Capture window summary from `/data/UserData/move-anything/superarp.log`:
+  - `MIDI Stop` count: `0`
+  - `MIDI Start` count: `0`
+  - `run_step emit` count: `153`
+  - `tick no-output` count: `6305`
+- Gap analysis on `run_step emit` sequence IDs:
+  - `emit_count=153`
+  - `max_seq_gap=52`
+  - `large_gaps_ge_200=0`
+- User noted one manual pad release during run; logs show corresponding state reset but no sustained scheduler stall.
+
+### Interpretation
+- In this capture, SuperArp itself did not stall and did not receive transport stop/start resets.
+- `tick no-output` lines are expected between scheduled step boundaries; the observed cadence remained consistent.
+- This points away from a SuperArp step scheduler freeze as the primary cause of intermittent playback in this run.
