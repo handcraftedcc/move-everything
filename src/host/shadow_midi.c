@@ -104,6 +104,7 @@ uint8_t shadow_chain_remap_channel(int slot, uint8_t status)
 void shadow_chain_dispatch_midi_to_slots(const uint8_t *pkt, int log_on, int *midi_log_count)
 {
     const plugin_api_v2_t *pv2 = *host_plugin_v2;
+    uint8_t cable = (pkt[0] >> 4) & 0x0F;
     uint8_t status_usb = pkt[1];
     uint8_t type = status_usb & 0xF0;
     uint8_t midi_ch = status_usb & 0x0F;
@@ -114,6 +115,12 @@ void shadow_chain_dispatch_midi_to_slots(const uint8_t *pkt, int log_on, int *mi
         /* Check channel match: slot receives this channel, or slot is set to All (-1) */
         if (host_chain_slots[i].channel != (int)midi_ch && host_chain_slots[i].channel != -1)
             continue;
+
+        /* before-mode slots consume internal MIDI pre-Move and should not
+         * receive echoed cable 2 events from Move's MIDI_OUT path. */
+        if (cable == 0x02 && host_chain_slots[i].midi_exec_before) {
+            continue;
+        }
 
         /* Lazy activation check */
         if (!host_chain_slots[i].active) {

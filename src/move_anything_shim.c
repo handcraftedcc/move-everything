@@ -173,6 +173,7 @@ static float shadow_master_gain = 1.0f;
 
 /* Forward declaration */
 static uint64_t now_mono_ms(void);
+static int shadow_chain_midi_send_external_cb(const uint8_t *msg, int len);
 
 
 /* Overtake DSP state - loaded when an overtake module has a dsp.so */
@@ -648,10 +649,49 @@ static void shadow_inprocess_process_midi(void) {
         }
     }
 
-    /* MIDI_IN (internal controls) is NOT routed to DSP here.
-     * - Shadow UI handles knobs via set_param based on ui_hierarchy
-     * - Capture rules are handled in shadow_filter_move_input (post-ioctl)
-     * - Internal notes/CCs should only reach Move, not DSP */
+    /* MIDI exec before-mode:
+     * For slots that opt in, run internal note data through chain MIDI FX before
+     * Move consumes it, then block raw cable 0 so only injected cable 2 remains. */
+    {
+        uint8_t *in_src = global_mmap_addr + MIDI_IN_OFFSET;
+        for (int i = 0; i < MIDI_BUFFER_SIZE; i += 4) {
+            uint8_t p0 = in_src[i];
+            uint8_t p1 = in_src[i + 1];
+            uint8_t p2 = in_src[i + 2];
+            uint8_t p3 = in_src[i + 3];
+            if (p0 == 0 && p1 == 0 && p2 == 0 && p3 == 0) continue;
+
+            uint8_t cin = p0 & 0x0F;
+            uint8_t cable = (p0 >> 4) & 0x0F;
+            uint8_t status = p1;
+            uint8_t type = status & 0xF0;
+            uint8_t midi_ch = status & 0x0F;
+
+            if (cable != 0x00) continue;
+            if (cin != 0x08 && cin != 0x09) continue;
+            if (type != 0x80 && type != 0x90) continue;
+            if (p2 < 10) continue;  /* Never route knob-touch notes through before mode. */
+
+            int dispatched = 0;
+            if (shadow_plugin_v2 && shadow_plugin_v2->on_midi) {
+                uint8_t msg[3] = { status, p2, p3 };
+                for (int s = 0; s < SHADOW_CHAIN_INSTANCES; s++) {
+                    shadow_chain_slot_t *slot = &shadow_chain_slots[s];
+                    if (!slot->active || !slot->instance || !slot->midi_exec_before) continue;
+                    if (slot->channel != -1 && slot->channel != (int)midi_ch) continue;
+                    shadow_plugin_v2->on_midi(slot->instance, msg, 3, MOVE_MIDI_SOURCE_INTERNAL);
+                    dispatched = 1;
+                }
+            }
+
+            if (dispatched) {
+                in_src[i] = 0;
+                in_src[i + 1] = 0;
+                in_src[i + 2] = 0;
+                in_src[i + 3] = 0;
+            }
+        }
+    }
 
     /* MIDI_OUT → DSP: Move's track output contains only musical notes.
      * Internal controls (knob touches, step buttons) do NOT appear in MIDI_OUT.
@@ -1874,6 +1914,16 @@ static void shadow_refresh_external_inject_state(void)
         }
     }
 
+    if (!internal_enabled) {
+        for (int slot = 0; slot < SHADOW_CHAIN_INSTANCES; ++slot) {
+            shadow_chain_slot_t *s = &shadow_chain_slots[slot];
+            if (s->active && s->instance && s->midi_exec_before) {
+                internal_enabled = 1;
+                break;
+            }
+        }
+    }
+
     if (!shadow_plugin_v2 || !shadow_plugin_v2->get_param) {
         shadow_external_inject_mode_enabled = external_enabled;
         shadow_internal_inject_mode_enabled = internal_enabled;
@@ -2110,6 +2160,49 @@ static int shadow_midi_to_move_packet_valid(const uint8_t pkt[4])
     }
 
     return 0;
+}
+
+static int shadow_midi_to_move_enqueue_packet(const uint8_t pkt[4])
+{
+    if (!pkt || !shadow_midi_to_move_shm) return 0;
+    if (shadow_midi_to_move_shm->magic != SHADOW_MIDI_TO_MOVE_MAGIC ||
+        shadow_midi_to_move_shm->version != SHADOW_MIDI_TO_MOVE_VERSION) {
+        return 0;
+    }
+
+    uint32_t capacity = shadow_midi_to_move_shm->capacity;
+    if (capacity == 0) return 0;
+
+    uint32_t idx = __atomic_fetch_add(&shadow_midi_to_move_shm->write_idx, 1u, __ATOMIC_ACQ_REL);
+    uint32_t slot = idx % capacity;
+    uint32_t packet = (uint32_t)(pkt[0] & 0x0Fu) |
+                      ((uint32_t)pkt[1] << 8) |
+                      ((uint32_t)pkt[2] << 16) |
+                      ((uint32_t)pkt[3] << 24);
+
+    uint32_t *packet_words = (uint32_t *)shadow_midi_to_move_packets(shadow_midi_to_move_shm);
+    uint32_t *ready_words = shadow_midi_to_move_ready(shadow_midi_to_move_shm);
+    __atomic_store_n(&packet_words[slot], packet, __ATOMIC_RELEASE);
+    __atomic_store_n(&ready_words[slot], idx + 1u, __ATOMIC_RELEASE);
+    return 1;
+}
+
+static int shadow_chain_midi_send_external_cb(const uint8_t *msg, int len)
+{
+    if (!msg || len < 4) return 0;
+
+    uint8_t status = msg[1];
+    uint8_t type = (uint8_t)(status & 0xF0u);
+    /* Keep shim-side before-mode forwarding note-only to avoid transport/clock feedback loops. */
+    if (type != 0x80u && type != 0x90u) {
+        return len;
+    }
+
+    uint8_t pkt[4] = { (uint8_t)(msg[0] & 0x0Fu), msg[1], msg[2], msg[3] };
+    if (!shadow_midi_to_move_packet_valid(pkt)) return 0;
+
+    if (!shadow_midi_to_move_enqueue_packet(pkt)) return 0;
+    return len;
 }
 
 static int shadow_midi_to_move_is_duplicate_edge(const uint8_t pkt[4])
@@ -2771,6 +2864,7 @@ void *mmap(void *addr, size_t length, int prot, int flags, int fd, off_t offset)
                 .shadow_ui_enabled = &shadow_ui_enabled,
                 .startup_modwheel_countdown = &shadow_startup_modwheel_countdown,
                 .startup_modwheel_reset_frames = STARTUP_MODWHEEL_RESET_FRAMES,
+                .midi_send_external = shadow_chain_midi_send_external_cb,
                 .handle_param_special = shim_handle_param_special,
             };
             chain_mgmt_init(&cm_host);

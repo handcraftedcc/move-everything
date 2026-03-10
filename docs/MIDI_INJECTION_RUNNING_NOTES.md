@@ -487,3 +487,32 @@ Purpose: append-only notes for debugging `midi_to_move` injection stability in `
 ### Expected effect
 - Active arp/internal injection sessions keep stable render/tick cadence.
 - After inactivity, slots can return to idle skipping behavior instead of running continuously forever.
+
+## 2026-03-10 (midi exec before/after variation branch)
+
+### Goal
+- Keep all existing mailbox/injection guards, but remove dependency on a dedicated injection module for pre-Move MIDI-FX execution.
+- Add per-slot control for when MIDI FX run: `after` (legacy behavior) vs `before` (new shim-driven path).
+
+### Change implemented
+- Added per-slot setting `slot:midi_exec` (`after`/`before`, default `after`) across:
+  - shadow slot state (`midi_exec_before`)
+  - shadow UI chain/slot settings (`Midi Exec`)
+  - config/state persistence (`shadow_chain_config`, set-page config, and `slot_midi_exec` in shadow state).
+- Added chain host v2 support for `patch:midi_exec`:
+  - patch parser reads `midi_exec`
+  - per-instance state `inst->midi_exec_before`
+  - set/get plumbing for `patch:midi_exec`.
+- In chain v2 `v2_on_midi`, when `midi_exec_before` and source is internal:
+  - process through MIDI FX
+  - emit note events to host `midi_send_external`
+  - skip local synth path for those internal-before events.
+- Wired chain host API in shadow chain mgmt with `midi_send_external` callback.
+- Shim callback enqueues note-only USB packets into existing `midi_to_move` queue (no new injection path).
+- Shim pre-ioctl now routes internal cable-0 note data into before-mode slots and blocks raw cable-0 packet when dispatched, so Move sees processed cable-2 injection instead.
+- Existing guarded queue drain/injection logic remains unchanged (busy-prefix defer, duplicate/mailbox checks, occupancy-safe insertion).
+
+### Verification
+- `tests/host/test_chain_midi_exec_before.sh` PASS
+- `tests/shadow/test_shadow_midi_exec_before_wiring.sh` PASS
+- `tests/shadow/test_midi_to_move_injection_stability.sh` PASS

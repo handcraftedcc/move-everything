@@ -20,6 +20,7 @@ typedef struct shadow_chain_slot_t {
     float volume;           /* 0.0 to 1.0, user-set level (never modified by mute/solo) */
     int muted;              /* 1 = muted (Mute+Track or Move speakerOn sync) */
     int soloed;             /* 1 = soloed (Shift+Mute+Track or Move solo-cue sync) */
+    int midi_exec_before;   /* 0 = after (default), 1 = before (run MIDI FX pre-Move path) */
     int forward_channel;    /* -2 = passthrough, -1 = auto, 0-15 = forward MIDI to this channel */
     char patch_name[64];
     shadow_capture_rules_t capture;  /* MIDI controls this slot captures when focused */

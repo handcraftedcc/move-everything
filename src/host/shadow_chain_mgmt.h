@@ -69,6 +69,7 @@ typedef struct {
     bool *shadow_ui_enabled;
     int *startup_modwheel_countdown;
     int startup_modwheel_reset_frames;
+    int (*midi_send_external)(const uint8_t *msg, int len);
 
     /* Param request: delegate shim-specific param prefixes (overtake_dsp, etc.)
      * The shim callback reads/writes shadow_param->key/value/error/result_len directly.

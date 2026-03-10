@@ -252,6 +252,7 @@ typedef struct {
     int knob_mapping_count;
     int receive_channel;   /* 0=not saved, 1-16=specific channel (from saved preset) */
     int forward_channel;   /* 0=not saved, -2=passthrough, -1=auto, 1-16=specific (from saved preset) */
+    int midi_exec_before;  /* 0=after (default), 1=before (run MIDI FX before Move path) */
 } patch_info_t;
 
 /* ============================================================================
@@ -441,6 +442,7 @@ typedef struct chain_instance {
 
     /* MIDI input filter */
     midi_input_t midi_input;
+    int midi_exec_before;
 
     /* Raw MIDI bypass */
     int raw_midi;
@@ -1770,6 +1772,14 @@ static int json_get_int(const char *json, const char *key, int *out) {
     /* Parse integer */
     *out = atoi(pos);
     return 0;
+}
+
+static int parse_midi_exec_before(const char *val)
+{
+    if (!val || !val[0]) return 0;
+    if (strcmp(val, "before") == 0) return 1;
+    if (strcmp(val, "after") == 0) return 0;
+    return atoi(val) != 0;
 }
 
 static int json_get_section_bounds(const char *json, const char *section_key,
@@ -5666,6 +5676,14 @@ static int v2_parse_patch_file(chain_instance_t *inst, const char *path, patch_i
     /* Parse receive_channel and forward_channel (top-level in chain content) */
     json_get_int(json, "receive_channel", &patch->receive_channel);
     json_get_int(json, "forward_channel", &patch->forward_channel);
+    {
+        char midi_exec_buf[16];
+        if (json_get_string(json, "midi_exec", midi_exec_buf, sizeof(midi_exec_buf)) == 0) {
+            patch->midi_exec_before = parse_midi_exec_before(midi_exec_buf);
+        } else {
+            patch->midi_exec_before = 0;
+        }
+    }
 
     free(json);
     return 0;
@@ -5875,6 +5893,7 @@ static int v2_load_from_patch_info(chain_instance_t *inst, patch_info_t *patch) 
 
     /* Copy other settings */
     inst->midi_input = patch->midi_input;
+    inst->midi_exec_before = patch->midi_exec_before ? 1 : 0;
 
     inst->mute_countdown = MUTE_BLOCKS_AFTER_SWITCH;
 
@@ -5934,6 +5953,17 @@ static int inst_midi_source_allowed(const chain_instance_t *inst, int source)
     }
 
     return 1;
+}
+
+static uint8_t usb_cin_from_status_len(uint8_t status, int len)
+{
+    uint8_t type = status & 0xF0u;
+    if (status >= 0xF8u) return 0x0Fu;          /* Realtime */
+    if (type >= 0x80u && type <= 0xE0u) return (uint8_t)(type >> 4);
+    if (status == 0xF2u) return 0x03u;          /* Song position pointer (3 bytes) */
+    if (status == 0xF1u || status == 0xF3u) return 0x02u; /* 2-byte system common */
+    if (len == 1) return 0x05u;                 /* 1-byte system common */
+    return 0x0Fu;
 }
 
 /* V2 on_midi handler */
@@ -6175,6 +6205,25 @@ static void v2_on_midi(void *instance, const uint8_t *msg, int len, int source) 
         }
     }
 
+    if (inst->midi_exec_before && source == MOVE_MIDI_SOURCE_INTERNAL) {
+        if (inst->host && inst->host->midi_send_external) {
+            for (int i = 0; i < out_count; i++) {
+                uint8_t status = out_msgs[i][0];
+                uint8_t type = status & 0xF0u;
+                if (type != 0x80u && type != 0x90u) continue;
+                uint8_t usb_msg[4] = {
+                    usb_cin_from_status_len(status, out_lens[i]),
+                    status,
+                    (out_lens[i] > 1) ? out_msgs[i][1] : 0,
+                    (out_lens[i] > 2) ? out_msgs[i][2] : 0
+                };
+                inst->host->midi_send_external(usb_msg, 4);
+            }
+        }
+        v2_midi_debug_maybe_flush(inst, now_ms);
+        return;
+    }
+
     /* Send processed messages to synth */
     for (int i = 0; i < out_count; i++) {
         if (debug_enabled) {
@@ -6227,6 +6276,14 @@ static void v2_set_param(void *instance, const char *key, const char *val) {
             inst->current_patch = -1;
         } else {
             v2_load_patch(inst, idx);
+        }
+    }
+    else if (strcmp(key, "patch:midi_exec") == 0) {
+        int before = parse_midi_exec_before(val);
+        inst->midi_exec_before = before;
+        if (inst->current_patch >= 0 && inst->current_patch < inst->patch_count) {
+            inst->patches[inst->current_patch].midi_exec_before = before;
+            inst->dirty = 1;
         }
     }
     else if (strcmp(key, "save_patch") == 0) {
@@ -6688,6 +6745,13 @@ static int v2_get_param(void *instance, const char *key, char *buf, int buf_len)
             return snprintf(buf, buf_len, "%d", inst->patches[inst->current_patch].forward_channel);
         }
         return snprintf(buf, buf_len, "0");
+    }
+    if (strcmp(key, "patch:midi_exec") == 0) {
+        if (inst->current_patch >= 0 && inst->current_patch < inst->patch_count) {
+            return snprintf(buf, buf_len, "%s",
+                            inst->patches[inst->current_patch].midi_exec_before ? "before" : "after");
+        }
+        return snprintf(buf, buf_len, "%s", inst->midi_exec_before ? "before" : "after");
     }
     if (strncmp(key, "patch_name_", 11) == 0) {
         int idx = atoi(key + 11);

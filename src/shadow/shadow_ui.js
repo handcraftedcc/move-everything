@@ -682,6 +682,7 @@ const SLOT_SETTINGS = [
     { key: "slot:volume", label: "Volume", type: "float", min: 0, max: 1, step: 0.05 },
     { key: "slot:muted", label: "Muted", type: "int", min: 0, max: 1, step: 1 },
     { key: "slot:soloed", label: "Soloed", type: "int", min: 0, max: 1, step: 1 },
+    { key: "slot:midi_exec", label: "Midi Exec", type: "int", min: 0, max: 1, step: 1 },
     { key: "slot:receive_channel", label: "Recv Ch", type: "int", min: 0, max: 16, step: 1 },
     { key: "slot:forward_channel", label: "Fwd Ch", type: "int", min: -2, max: 15, step: 1 },  // -2 = passthrough, -1 = auto, 0-15 = ch 1-16
 ];
@@ -994,6 +995,7 @@ const CHAIN_SETTINGS_ITEMS = [
     { key: "slot:volume", label: "Volume", type: "float", min: 0, max: 1, step: 0.05 },
     { key: "slot:muted", label: "Muted", type: "int", min: 0, max: 1, step: 1 },
     { key: "slot:soloed", label: "Soloed", type: "int", min: 0, max: 1, step: 1 },
+    { key: "slot:midi_exec", label: "Midi Exec", type: "int", min: 0, max: 1, step: 1 },
     { key: "slot:receive_channel", label: "Recv Ch", type: "int", min: 0, max: 16, step: 1 },
     { key: "slot:forward_channel", label: "Fwd Ch", type: "int", min: -2, max: 15, step: 1 },  // -2 = passthrough, -1 = auto, 0-15 = ch 1-16
     { key: "save", label: "[Save]", type: "action" },  // Save slot preset (overwrite for existing)
@@ -2117,6 +2119,7 @@ function saveSlotsToConfig(nextSlots) {
         patches: nextSlots.map((slot, idx) => ({
             name: slot.name,
             channel: slot.channel,
+            midi_exec: parseInt(getSlotParam(idx, "slot:midi_exec") || "0") ? "before" : "after",
             forward_channel: parseInt(getSlotParam(idx, "slot:forward_channel") || "-1")
         })),
         master_fx: currentMasterFxId || ""
@@ -2135,6 +2138,7 @@ function saveConfigMasterFx() {
         patches: data && Array.isArray(data.patches) ? data.patches : slots.map((slot, idx) => ({
             name: slot.name,
             channel: slot.channel,
+            midi_exec: parseInt(getSlotParam(idx, "slot:midi_exec") || "0") ? "before" : "after",
             forward_channel: parseInt(getSlotParam(idx, "slot:forward_channel") || "-1")
         })),
         master_fx: currentMasterFxId || "",
@@ -2454,8 +2458,10 @@ function buildSlotPatchJson(slotIndex, name) {
     /* Include slot channel settings */
     const recvCh = getSlotParam(slotIndex, "slot:receive_channel");
     const fwdCh = getSlotParam(slotIndex, "slot:forward_channel");
+    const midiExec = getSlotParam(slotIndex, "slot:midi_exec");
     if (recvCh !== null) patch.receive_channel = parseInt(recvCh);
     if (fwdCh !== null) patch.forward_channel = parseInt(fwdCh);
+    if (midiExec !== null) patch.midi_exec = parseInt(midiExec) ? "before" : "after";
 
     /* Include knob mappings */
     const knobMappingsJson = getSlotParam(slotIndex, "knob_mappings");
@@ -4056,6 +4062,9 @@ function getChainSettingValue(slot, setting) {
     if (setting.key === "slot:soloed") {
         return parseInt(val) ? "Yes" : "No";
     }
+    if (setting.key === "slot:midi_exec") {
+        return parseInt(val) ? "Before" : "After";
+    }
     if (setting.key === "slot:forward_channel") {
         const ch = parseInt(val);
         if (ch === -2) return "Thru";
@@ -5492,6 +5501,9 @@ function getSlotSettingValue(slot, setting) {
     }
     if (setting.key === "slot:soloed") {
         return parseInt(val) ? "Yes" : "No";
+    }
+    if (setting.key === "slot:midi_exec") {
+        return parseInt(val) ? "Before" : "After";
     }
     if (setting.key === "slot:forward_channel") {
         const ch = parseInt(val);

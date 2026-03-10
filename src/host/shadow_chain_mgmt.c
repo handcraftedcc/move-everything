@@ -53,6 +53,11 @@ FILE *shadow_midi_out_log = NULL;
 static chain_mgmt_host_t host;
 static volatile int chain_mgmt_initialized = 0;
 
+static int shadow_chain_host_midi_send_external(const uint8_t *msg, int len) {
+    if (!host.midi_send_external) return 0;
+    return host.midi_send_external(msg, len);
+}
+
 /* UI request tracking */
 static uint32_t shadow_ui_request_seen = 0;
 
@@ -349,6 +354,7 @@ void shadow_chain_defaults(void) {
         shadow_chain_slots[i].volume = 1.0f;
         shadow_chain_slots[i].muted = 0;
         shadow_chain_slots[i].soloed = 0;
+        shadow_chain_slots[i].midi_exec_before = 0;
         shadow_chain_slots[i].forward_channel = -1;
         capture_clear(&shadow_chain_slots[i].capture);
         strncpy(shadow_chain_slots[i].patch_name,
@@ -435,6 +441,21 @@ void shadow_chain_load_config(void) {
                 float vol = atof(vol_colon + 1);
                 if (vol >= 0.0f && vol <= 1.0f) {
                     shadow_chain_slots[i].volume = vol;
+                }
+            }
+        }
+
+        /* Parse midi_exec ("after"/"before") */
+        char *midi_exec_pos = strstr(name_pos, "\"midi_exec\"");
+        if (midi_exec_pos) {
+            char *midi_exec_colon = strchr(midi_exec_pos, ':');
+            if (midi_exec_colon) {
+                midi_exec_colon++;
+                while (*midi_exec_colon == ' ' || *midi_exec_colon == '"') midi_exec_colon++;
+                if (strncmp(midi_exec_colon, "before", 6) == 0 || *midi_exec_colon == '1') {
+                    shadow_chain_slots[i].midi_exec_before = 1;
+                } else {
+                    shadow_chain_slots[i].midi_exec_before = 0;
                 }
             }
         }
@@ -827,6 +848,7 @@ int shadow_inprocess_load_chain(void) {
     shadow_host_api.audio_out_offset = MOVE_AUDIO_OUT_OFFSET;
     shadow_host_api.audio_in_offset = MOVE_AUDIO_IN_OFFSET;
     shadow_host_api.log = shadow_log;
+    shadow_host_api.midi_send_external = shadow_chain_host_midi_send_external;
 
     move_plugin_init_v2_fn init_v2 = (move_plugin_init_v2_fn)dlsym(
         shadow_dsp_handle, MOVE_PLUGIN_INIT_V2_SYMBOL);
@@ -977,6 +999,12 @@ int shadow_inprocess_load_chain(void) {
                             shadow_chain_slots[i].forward_channel = (fwd_ch > 0) ? fwd_ch - 1 : fwd_ch;
                         }
                     }
+                    len = shadow_plugin_v2->get_param(shadow_chain_slots[i].instance,
+                        "patch:midi_exec", ch_buf, sizeof(ch_buf));
+                    if (len > 0) {
+                        ch_buf[len < (int)sizeof(ch_buf) ? len : (int)sizeof(ch_buf) - 1] = '\0';
+                        shadow_chain_slots[i].midi_exec_before = (strncmp(ch_buf, "before", 6) == 0 || atoi(ch_buf) != 0) ? 1 : 0;
+                    }
                 }
                 {
                     char msg[256];
@@ -1035,6 +1063,12 @@ int shadow_inprocess_load_chain(void) {
                     if (fwd_ch != 0) {
                         shadow_chain_slots[i].forward_channel = (fwd_ch > 0) ? fwd_ch - 1 : fwd_ch;
                     }
+                }
+                len = shadow_plugin_v2->get_param(shadow_chain_slots[i].instance,
+                    "patch:midi_exec", ch_buf, sizeof(ch_buf));
+                if (len > 0) {
+                    ch_buf[len < (int)sizeof(ch_buf) ? len : (int)sizeof(ch_buf) - 1] = '\0';
+                    shadow_chain_slots[i].midi_exec_before = (strncmp(ch_buf, "before", 6) == 0 || atoi(ch_buf) != 0) ? 1 : 0;
                 }
             }
         } else {
@@ -1366,6 +1400,12 @@ void shadow_inprocess_handle_ui_request(void) {
                 shadow_chain_slots[slot].forward_channel = (fwd_ch > 0) ? fwd_ch - 1 : fwd_ch;
             }
         }
+        len = shadow_plugin_v2->get_param(shadow_chain_slots[slot].instance,
+            "patch:midi_exec", ch_buf, sizeof(ch_buf));
+        if (len > 0) {
+            ch_buf[len < (int)sizeof(ch_buf) ? len : (int)sizeof(ch_buf) - 1] = '\0';
+            shadow_chain_slots[slot].midi_exec_before = (strncmp(ch_buf, "before", 6) == 0 || atoi(ch_buf) != 0) ? 1 : 0;
+        }
     }
 
     shadow_ui_state_update_slot(slot);
@@ -1422,6 +1462,16 @@ int shadow_handle_slot_param_set(int slot, const char *key, const char *value) {
         }
         return 1;
     }
+    if (strcmp(key, "slot:midi_exec") == 0) {
+        int before = atoi(value) ? 1 : 0;
+        shadow_chain_slots[slot].midi_exec_before = before;
+        if (shadow_plugin_v2 && shadow_plugin_v2->set_param && shadow_chain_slots[slot].instance) {
+            shadow_plugin_v2->set_param(shadow_chain_slots[slot].instance,
+                "patch:midi_exec", before ? "before" : "after");
+        }
+        shadow_ui_state_update_slot(slot);
+        return 1;
+    }
     return 0;
 }
 
@@ -1441,6 +1491,9 @@ int shadow_handle_slot_param_get(int slot, const char *key, char *buf, int buf_l
     if (strcmp(key, "slot:receive_channel") == 0) {
         int ch = shadow_chain_slots[slot].channel;
         return snprintf(buf, buf_len, "%d", (ch < 0) ? 0 : ch + 1);
+    }
+    if (strcmp(key, "slot:midi_exec") == 0) {
+        return snprintf(buf, buf_len, "%d", shadow_chain_slots[slot].midi_exec_before ? 1 : 0);
     }
     return -1;
 }

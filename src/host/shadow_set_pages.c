@@ -185,9 +185,10 @@ void shadow_save_config_to_dir(const char *dir) {
         int display_fwd = host.chain_slots[i].forward_channel >= 0
             ? host.chain_slots[i].forward_channel + 1
             : host.chain_slots[i].forward_channel;
-        fprintf(f, "    {\"name\": \"%s\", \"channel\": %d, \"volume\": %.3f, \"forward_channel\": %d, \"muted\": %d, \"soloed\": %d}%s\n",
+        const char *midi_exec = host.chain_slots[i].midi_exec_before ? "before" : "after";
+        fprintf(f, "    {\"name\": \"%s\", \"channel\": %d, \"volume\": %.3f, \"midi_exec\": \"%s\", \"forward_channel\": %d, \"muted\": %d, \"soloed\": %d}%s\n",
                 host.chain_slots[i].patch_name, display_ch,
-                host.chain_slots[i].volume, display_fwd,
+                host.chain_slots[i].volume, midi_exec, display_fwd,
                 host.chain_slots[i].muted, host.chain_slots[i].soloed,
                 i < SHADOW_CHAIN_INSTANCES - 1 ? "," : "");
     }
@@ -253,6 +254,19 @@ int shadow_load_config_from_dir(const char *dir) {
                 float vol = atof(vol_colon + 1);
                 if (vol >= 0.0f && vol <= 1.0f)
                     host.chain_slots[i].volume = vol;
+            }
+        }
+        char *midi_exec_pos = strstr(name_pos, "\"midi_exec\"");
+        if (midi_exec_pos) {
+            char *midi_exec_colon = strchr(midi_exec_pos, ':');
+            if (midi_exec_colon) {
+                midi_exec_colon++;
+                while (*midi_exec_colon == ' ' || *midi_exec_colon == '"') midi_exec_colon++;
+                if (strncmp(midi_exec_colon, "before", 6) == 0 || *midi_exec_colon == '1') {
+                    host.chain_slots[i].midi_exec_before = 1;
+                } else {
+                    host.chain_slots[i].midi_exec_before = 0;
+                }
             }
         }
         char *fwd_pos = strstr(name_pos, "\"forward_channel\"");

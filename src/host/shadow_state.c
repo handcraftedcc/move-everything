@@ -199,6 +199,11 @@ void shadow_save_state(void)
             host_chain_slots[1].forward_channel,
             host_chain_slots[2].forward_channel,
             host_chain_slots[3].forward_channel);
+    fprintf(f, "  \"slot_midi_exec\": [%d, %d, %d, %d],\n",
+            host_chain_slots[0].midi_exec_before ? 1 : 0,
+            host_chain_slots[1].midi_exec_before ? 1 : 0,
+            host_chain_slots[2].midi_exec_before ? 1 : 0,
+            host_chain_slots[3].midi_exec_before ? 1 : 0);
     fprintf(f, "  \"slot_muted\": [%d, %d, %d, %d],\n",
             host_chain_slots[0].muted,
             host_chain_slots[1].muted,
@@ -290,6 +295,30 @@ void shadow_load_state(void)
                 char msg[128];
                 snprintf(msg, sizeof(msg), "Loaded slot fwd channels: [%d, %d, %d, %d]",
                          f0, f1, f2, f3);
+                if (host_log) host_log(msg);
+            }
+        }
+    }
+
+    /* Parse slot_midi_exec array */
+    const char *midi_exec_key = "\"slot_midi_exec\":";
+    char *midi_exec_pos = strstr(json, midi_exec_key);
+    if (midi_exec_pos) {
+        midi_exec_pos = strchr(midi_exec_pos, '[');
+        if (midi_exec_pos) {
+            int m0, m1, m2, m3;
+            if (sscanf(midi_exec_pos, "[%d, %d, %d, %d]", &m0, &m1, &m2, &m3) == 4) {
+                host_chain_slots[0].midi_exec_before = m0 ? 1 : 0;
+                host_chain_slots[1].midi_exec_before = m1 ? 1 : 0;
+                host_chain_slots[2].midi_exec_before = m2 ? 1 : 0;
+                host_chain_slots[3].midi_exec_before = m3 ? 1 : 0;
+
+                char msg[128];
+                snprintf(msg, sizeof(msg), "Loaded slot midi_exec: [%d, %d, %d, %d]",
+                         host_chain_slots[0].midi_exec_before,
+                         host_chain_slots[1].midi_exec_before,
+                         host_chain_slots[2].midi_exec_before,
+                         host_chain_slots[3].midi_exec_before);
                 if (host_log) host_log(msg);
             }
         }
