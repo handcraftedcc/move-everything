@@ -53,4 +53,24 @@ if ! rg -n "midi_exec_before" "$shim" >/dev/null 2>&1; then
   exit 1
 fi
 
+route_ctx=$(sed -n '/static void shadow_route_midi_exec_before_from_midi_in/,/^}/p' "$shim")
+if ! echo "$route_ctx" | rg -q "p2 < 68"; then
+  echo "FAIL: midi_exec_before should ignore non-pad notes below 68" >&2
+  exit 1
+fi
+if ! echo "$route_ctx" | rg -q "p2 > 99"; then
+  echo "FAIL: midi_exec_before should ignore non-pad notes above 99" >&2
+  exit 1
+fi
+
+rt_ctx=$(sed -n '/Handle system realtime messages/,/Done with this packet/p' "$shim")
+if ! echo "$rt_ctx" | rg -q "slot->midi_exec_before"; then
+  echo "FAIL: shim must forward internal realtime to midi_exec_before slots" >&2
+  exit 1
+fi
+if ! echo "$rt_ctx" | rg -q "MOVE_MIDI_SOURCE_INTERNAL"; then
+  echo "FAIL: internal realtime forward must use internal source tag" >&2
+  exit 1
+fi
+
 echo "PASS: shadow midi_exec before wiring present"

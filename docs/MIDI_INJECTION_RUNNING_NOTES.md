@@ -362,6 +362,28 @@ Purpose: append-only notes for debugging `midi_to_move` injection stability in `
   - `./scripts/build.sh`
   - `./scripts/install.sh local --skip-confirmation --skip-modules`
 
+## 2026-03-10 (midi exec before: pad-only replacement + internal realtime forward)
+
+### Evidence observed
+- In `Midi Exec=Before`, static transforms (chord/velocity) worked, but arp behavior was inconsistent.
+- User requirement clarified scope: only main pad grid should be replaced; non-pad controls/notes must pass unchanged.
+- SuperArp metadata/help confirms `sync=clock` requires MIDI Start + Clock ticks.
+
+### Change implemented
+- Restricted `shadow_route_midi_exec_before_from_midi_in` interception to pad grid notes only (`68..99`).
+  - Non-pad notes are no longer blocked/replaced in before mode.
+- Added internal realtime forwarding in `shadow_inprocess_process_midi`:
+  - cable 0 realtime (`0xF8/0xFA/0xFB/0xFC`) now forwards to active `midi_exec_before` slots as `MOVE_MIDI_SOURCE_INTERNAL`.
+  - existing external cable 2 realtime fan-out behavior unchanged.
+
+### Verification
+- `tests/shadow/test_shadow_midi_exec_before_wiring.sh` PASS (updated assertions for pad-range filter + internal realtime forwarding).
+- `tests/shadow/test_midi_to_move_injection_stability.sh` PASS.
+- `tests/host/test_chain_midi_exec_before.sh` PASS.
+- Built and installed:
+  - `./scripts/build.sh`
+  - `./scripts/install.sh local --skip-confirmation --skip-modules`
+
 ### Expected effect
 - In `midi_inject_test` internal mode, SuperArp should no longer see external feedback packets.
 - This should remove source-path contamination and make internal-mode behavior consistent with user intent.

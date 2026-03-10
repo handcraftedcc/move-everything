@@ -665,13 +665,16 @@ static void shadow_inprocess_process_midi(void) {
         uint8_t cable = (p0 >> 4) & 0x0F;
         uint8_t status_usb = p1;
 
-        /* Handle system realtime messages (CIN=0x0F): clock, start, continue, stop
-         * These are 1-byte messages that should be broadcast to ALL active slots */
+        /* Handle system realtime messages (CIN=0x0F): clock, start, continue, stop */
         if (cin == 0x0F && status_usb >= 0xF8 && status_usb <= 0xFF) {
             if (status_usb == 0xFC) {
                 if (cable == 2) {
                     unified_log("shim", LOG_LEVEL_DEBUG,
                                 "rt-stop observed status=0xFC cable=%u path=external-to-slots",
+                                (unsigned)cable);
+                } else if (cable == 0) {
+                    unified_log("shim", LOG_LEVEL_DEBUG,
+                                "rt-stop observed status=0xFC cable=%u path=internal-before-slots",
                                 (unsigned)cable);
                 } else {
                     unified_log("shim", LOG_LEVEL_DEBUG,
@@ -685,18 +688,26 @@ static void shadow_inprocess_process_midi(void) {
                 sampler_on_clock(status_usb);
             }
 
-            /* Only broadcast cable 2 (external USB) clock to slots.
-             * Cable 0 = internal, cable 1 = TRS - both are Move's own output */
-            if (cable != 2) {
-                continue;
-            }
-            /* Broadcast to all active slots */
             if (shadow_plugin_v2 && shadow_plugin_v2->on_midi) {
                 uint8_t msg[3] = { status_usb, 0, 0 };
-                for (int s = 0; s < SHADOW_CHAIN_INSTANCES; s++) {
-                    if (shadow_chain_slots[s].active && shadow_chain_slots[s].instance) {
-                        shadow_plugin_v2->on_midi(shadow_chain_slots[s].instance, msg, 1,
-                                                  MOVE_MIDI_SOURCE_EXTERNAL);
+
+                /* External cable 2 realtime still fans out to all active slots. */
+                if (cable == 2) {
+                    for (int s = 0; s < SHADOW_CHAIN_INSTANCES; s++) {
+                        if (shadow_chain_slots[s].active && shadow_chain_slots[s].instance) {
+                            shadow_plugin_v2->on_midi(shadow_chain_slots[s].instance, msg, 1,
+                                                      MOVE_MIDI_SOURCE_EXTERNAL);
+                        }
+                    }
+                }
+
+                /* Internal cable 0 realtime is forwarded only to slots running
+                 * Midi Exec=Before so clock-synced MIDI FX can run in before mode. */
+                if (cable == 0) {
+                    for (int s = 0; s < SHADOW_CHAIN_INSTANCES; s++) {
+                        shadow_chain_slot_t *slot = &shadow_chain_slots[s];
+                        if (!slot->active || !slot->instance || !slot->midi_exec_before) continue;
+                        shadow_plugin_v2->on_midi(slot->instance, msg, 1, MOVE_MIDI_SOURCE_INTERNAL);
                     }
                 }
             }
@@ -2009,7 +2020,8 @@ static void shadow_route_midi_exec_before_from_midi_in(uint8_t *midi_in)
         if (cable != 0x00) continue;
         if (cin != 0x08 && cin != 0x09) continue;
         if (type != 0x80 && type != 0x90) continue;
-        if (p2 < 10) continue;  /* Never route knob-touch notes through before mode. */
+        /* Midi Exec=Before only replaces main 4x8 pad grid notes. */
+        if (p2 < 68 || p2 > 99) continue;
 
         int dispatched = 0;
         uint8_t msg[3] = { status, p2, p3 };
