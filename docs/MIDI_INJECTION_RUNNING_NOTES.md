@@ -246,3 +246,32 @@ Purpose: append-only notes for debugging `midi_to_move` injection stability in `
 
 ### Open questions
 - Does dropout-adjacent `0xFC` show up as `dispatch=internal` (likely XMOS/internal transport) or `dispatch=external` (feedback device path)?
+
+## 2026-03-10 (host-transport repro: no Start/Stop observed, upstream cadence gaps)
+
+### Evidence observed
+- Fresh repro capture (after deploying host transport probe and resetting logs):
+  - `/tmp/midi_debug/repro_20260310_113157/debug.log`
+  - `/tmp/midi_debug/repro_20260310_113157/midi_inject_test.log`
+- Transport probe results in `debug.log`:
+  - `debug_rt_transport=0`
+  - `debug_transport_status(FA/FB/FC)=0`
+  - `debug_asserts=0`
+- `midi_inject_test` internal-mode forwarding in the same repro window (`16:31`):
+  - `tx note-edge src=0`: `317`
+  - `tx note-edge src=2`: `0`
+  - `drop reason=system`: `0`
+  - `drop reason=queue-full`: `0`
+  - `drop reason=source`: `1` (single `src=2 status=0xA0` mismatch while mode is internal)
+- Internal forwarded note stream still shows periodic long cadence gaps despite no transport packets:
+  - repeated ~`1.5s`-`1.9s` gaps between `tx note-edge src=0` events
+  - examples: `16:31:18.630 gap_ms=1591`, `16:31:23.669 gap_ms=1649`, `16:31:59.221 gap_ms=1896`
+- `superarp.log` was empty in this run (no correlated Stop lines available in that file).
+
+### Interpretation
+- In this repro, Start/Stop/Continue was not observed on either cable path (`internal` or `external`) and not via host injection path.
+- Injection path remains healthy (no queue/system drops causing the pauses).
+- Audible intermittency aligns with upstream internal note-generation cadence gaps before/at module ingress, not with shim mailbox pressure or transport-stop forwarding in this run.
+
+### Open questions
+- What upstream component/state causes the ~1.5s cadence gaps in internal-source note generation (e.g. MIDI FX settings/state, sync/rhythm config, or transport state machine not emitting FA/FB/FC)?
