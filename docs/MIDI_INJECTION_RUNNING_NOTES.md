@@ -461,3 +461,29 @@ Purpose: append-only notes for debugging `midi_to_move` injection stability in `
 - Hardware verify after this change:
   - do `v2-midi tick-gap` lines disappear (or drop sharply) in the same internal-mode held-pad repro?
   - do audible short-burst stalls stop with unchanged routing/settings?
+
+## 2026-03-10 (idle cadence refinement: recent-activity window)
+
+### Evidence observed
+- Forcing continuous render whenever `midi_fx_count > 0` resolved SuperArp burst stalls, but it removed deep-idle render skipping for slots that were no longer receiving MIDI.
+- Goal: preserve arp/tick continuity during active use while still allowing true-inactive slots to sleep.
+
+### Change implemented
+- Added per-instance MIDI-FX recent-activity tracking in chain v2 (`src/modules/chain/dsp/chain_host.c`):
+  - new state: `midi_fx_last_activity_ms`
+  - new window constant: `MIDI_FX_ACTIVE_WINDOW_MS` (`5000ms`)
+  - activity is marked on incoming MIDI to chain (`v2_on_midi`) and when MIDI-FX tick emits output (`v2_tick_midi_fx`).
+- Exposed new chain `get_param` key:
+  - `midi_fx_active_recent` => `1` when activity was seen within the window, else `0`.
+- Updated shim idle gate (`src/move_anything_shim.c`) to use `midi_fx_active_recent` instead of `midi_fx_count` for `force_continuous_render`.
+
+### Verification
+- Added host regression: `tests/host/test_chain_midi_fx_idle_activity_window.sh` (PASS).
+- Existing regressions:
+  - `tests/shadow/test_midi_to_move_injection_stability.sh` PASS
+  - `bash tests/host/test_chain_v2_midi_source_gate.sh` PASS
+  - `bash tests/host/test_chain_midi_inject_prefx_guard.sh` PASS
+
+### Expected effect
+- Active arp/internal injection sessions keep stable render/tick cadence.
+- After inactivity, slots can return to idle skipping behavior instead of running continuously forever.

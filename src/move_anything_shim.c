@@ -1083,17 +1083,17 @@ static void shadow_inprocess_render_to_buffer(void) {
             if (!shadow_chain_slots[s].active || !shadow_chain_slots[s].instance) continue;
             int force_continuous_render = 0;
 
-            /* Slots with MIDI FX may depend on render_block cadence for FX tick
-             * (e.g. arpeggiators), even when current audio output is silent.
-             * Keep render cadence continuous for those slots. */
+            /* Keep render cadence continuous only while MIDI FX activity is
+             * recent. This preserves arp/tick timing, but still allows
+             * deep-idle render skipping after inactivity. */
             if (shadow_plugin_v2->get_param) {
-                char midi_fx_count_buf[16];
+                char midi_fx_active_recent_buf[16];
                 int ret = shadow_plugin_v2->get_param(
                     shadow_chain_slots[s].instance,
-                    "midi_fx_count",
-                    midi_fx_count_buf,
-                    (int)sizeof(midi_fx_count_buf));
-                if (ret > 0 && atoi(midi_fx_count_buf) > 0) {
+                    "midi_fx_active_recent",
+                    midi_fx_active_recent_buf,
+                    (int)sizeof(midi_fx_active_recent_buf));
+                if (ret > 0 && atoi(midi_fx_active_recent_buf) > 0) {
                     force_continuous_render = 1;
                 }
             }

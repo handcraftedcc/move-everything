@@ -115,6 +115,7 @@ typedef enum {
 /* Extra debug thresholds for diagnosing intermittent MIDI stalls in chain v2. */
 #define V2_MIDI_GAP_LOG_THRESHOLD_MS 800u
 #define V2_MIDI_GAP_ACTIVE_WINDOW_MS 3000u
+#define MIDI_FX_ACTIVE_WINDOW_MS 5000u
 
 /* Knob mapping types */
 typedef enum {
@@ -472,6 +473,7 @@ typedef struct chain_instance {
     /* When set, render_block outputs raw synth only (no inject mix, no FX).
      * The shim calls chain_process_fx() separately for same-frame FX. */
     int external_fx_mode;
+    uint64_t midi_fx_last_activity_ms;
 
     /* V2 MIDI debug counters (aggregated, debug-only logging). */
     uint64_t dbg_midi_window_start_ms;
@@ -704,6 +706,20 @@ static int is_external_transport_start_stop(const uint8_t *msg, int len)
 {
     if (!msg || len <= 0) return 0;
     return msg[0] == 0xFAu || msg[0] == 0xFBu || msg[0] == 0xFCu;
+}
+
+static void mark_midi_fx_activity(chain_instance_t *inst, uint64_t now_ms)
+{
+    if (!inst || inst->midi_fx_count <= 0 || now_ms == 0) return;
+    inst->midi_fx_last_activity_ms = now_ms;
+}
+
+static int midi_fx_active_recent(const chain_instance_t *inst, uint64_t now_ms)
+{
+    if (!inst || inst->midi_fx_count <= 0) return 0;
+    if (inst->midi_fx_last_activity_ms == 0) return 0;
+    if (now_ms < inst->midi_fx_last_activity_ms) return 0;
+    return (now_ms - inst->midi_fx_last_activity_ms) <= MIDI_FX_ACTIVE_WINDOW_MS;
 }
 
 /* Query current midi_inject_test source_mode from synth plugin. */
@@ -1546,6 +1562,7 @@ static void v2_unload_all_midi_fx(chain_instance_t *inst) {
         inst->midi_fx_ui_hierarchy[i][0] = '\0';
     }
     inst->midi_fx_count = 0;
+    inst->midi_fx_last_activity_ms = 0;
 }
 
 /* Process MIDI through all loaded MIDI FX modules */
@@ -1619,7 +1636,7 @@ static int v2_process_midi_fx(chain_instance_t *inst,
 static void v2_tick_midi_fx(chain_instance_t *inst, int frames) {
     if (!inst) return;
     int debug_enabled = v2_midi_debug_enabled(inst);
-    uint64_t now_ms = debug_enabled ? get_time_ms() : 0;
+    uint64_t now_ms = get_time_ms();
     uint32_t tick_out_note_edges = 0;
 
     if (debug_enabled) {
@@ -1647,6 +1664,9 @@ static void v2_tick_midi_fx(chain_instance_t *inst, int frames) {
         int out_lens[MIDI_FX_MAX_OUT_MSGS];
         int count = api->tick(fx_inst, frames, SAMPLE_RATE,
                               out_msgs, out_lens, MIDI_FX_MAX_OUT_MSGS);
+        if (count > 0) {
+            mark_midi_fx_activity(inst, now_ms);
+        }
 
         /* Send generated messages to synth */
         for (int i = 0; i < count; i++) {
@@ -5927,6 +5947,7 @@ static void v2_on_midi(void *instance, const uint8_t *msg, int len, int source) 
     uint8_t in_d2 = (len > 2) ? msg[2] : 0;
     int in_note_edge = is_note_edge_status(in_status, in_d2);
     int in_clock = (in_status == 0xF8u);
+    mark_midi_fx_activity(inst, now_ms);
 
     if (debug_enabled) {
         if (in_note_edge) inst->dbg_midi_in_note_edges++;
@@ -6696,6 +6717,10 @@ static int v2_get_param(void *instance, const char *key, char *buf, int buf_len)
     }
     if (strcmp(key, "midi_fx_count") == 0) {
         return snprintf(buf, buf_len, "%d", inst->midi_fx_count);
+    }
+    if (strcmp(key, "midi_fx_active_recent") == 0) {
+        uint64_t now_ms = get_time_ms();
+        return snprintf(buf, buf_len, "%d", midi_fx_active_recent(inst, now_ms));
     }
     if (strcmp(key, "midi_fx1_module") == 0) {
         return snprintf(buf, buf_len, "%s", inst->current_midi_fx_modules[0]);
