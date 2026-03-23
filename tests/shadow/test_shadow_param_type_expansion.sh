@@ -74,8 +74,23 @@ if ! rg -F -q "function drawWavPositionEditor(selectedKey, selectedMeta) {" "$sh
   exit 1
 fi
 
+if ! rg -F -q "function drawWavPositionEditor(selectedKey, selectedMeta) {" "$shadow_file" || ! rg -F -q "clear_screen();" "$shadow_file"; then
+  echo "FAIL: wav_position editor should clear background before drawing" >&2
+  exit 1
+fi
+
 if ! rg -F -q "hierEditorEditMode && selectedMeta && selectedMeta.ui_type === \"wav_position\"" "$shadow_file"; then
   echo "FAIL: wav_position waveform should only render while editing" >&2
+  exit 1
+fi
+
+if ! rg -F -q "if (meta && meta.ui_type === \"wav_position\" && isShiftHeld()) {" "$shadow_file"; then
+  echo "FAIL: wav_position jog editing is missing shift fine-step handling" >&2
+  exit 1
+fi
+
+if ! rg -F -q "const step = fineWavEdit ? 0.1 : (baseStep * accel);" "$shadow_file"; then
+  echo "FAIL: wav_position knob fine-step should be fixed at 0.1 with shift" >&2
   exit 1
 fi
 

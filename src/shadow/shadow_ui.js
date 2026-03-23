@@ -7225,7 +7225,10 @@ function adjustHierSelectedParam(delta) {
 
     /* Get step from metadata - default 1 for int, 0.02 for float */
     const isInt = meta && meta.type === "int";
-    const step = meta && meta.step ? meta.step : (isInt ? 1 : 0.02);
+    let step = meta && meta.step ? meta.step : (isInt ? 1 : 0.02);
+    if (meta && meta.ui_type === "wav_position" && isShiftHeld()) {
+        step = 0.1;
+    }
     const min = meta && typeof meta.min === "number" ? meta.min : 0;
     const max = meta && typeof meta.max === "number" ? meta.max : 1;
 
@@ -7721,7 +7724,7 @@ function processPendingHierKnob() {
     const accel = fineWavEdit ? 1 : calcKnobAccel(knobIndex, isInt);
 
     /* Apply accumulated delta with acceleration and clamp */
-    const step = (fineWavEdit ? (baseStep / 5) : baseStep) * accel;
+    const step = fineWavEdit ? 0.1 : (baseStep * accel);
     const newVal = Math.max(min, Math.min(max, num + delta * step));
 
     /* Set the new value */
@@ -8213,6 +8216,7 @@ function getWavPositionPreviewData(fullKey, meta) {
 }
 
 function drawWavPositionEditor(selectedKey, selectedMeta) {
+    clear_screen();
     hideOverlay();
 
     const fullKey = buildHierarchyParamKey(selectedKey);
