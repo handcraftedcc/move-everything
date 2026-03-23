@@ -634,6 +634,12 @@ Each entry in `params` is either:
 Rate options are emitted from slowest to fastest timing, for example:
 `16 bars, ... 2 bars, 1 bar, 1/1T, 1/2, 1/2T, 1/4, ...`
 
+`wav_position` behavior:
+- Waveform view opens only while the parameter is in edit mode (click-in).
+- `filepath_param` points to the source filepath parameter used to load waveform data.
+- `display_unit`: `percent`, `ms`, `sec` (alias: `s`).
+- `mode`: `position`, `start`, `end` (legacy aliases: `trim_front` -> `start`, `trim_end` -> `end`).
+
 `visible_if` can be attached to level entries and param entries:
 
 ```json
@@ -831,7 +837,7 @@ These map to knobs 1-8 in the Shadow UI for quick access.
       { "key": "root_note", "name": "Root", "type": "note", "mode": "multi", "min_note": 24, "max_note": 96 },
       { "key": "lfo_rate", "name": "Rate", "type": "rate", "include_bars": true, "bars_mode": "bars-every", "include_triplets": true },
       { "key": "sample_file", "name": "Sample", "type": "filepath", "root": "/data/UserData/UserLibrary/Samples", "filter": [".wav", ".aif"] },
-      { "key": "start_ms", "name": "Start", "type": "wav_position", "display_unit": "ms", "mode": "trim_front", "filepath_param": "sample_file", "min": 0, "max": 5000, "step": 1 },
+      { "key": "start_ms", "name": "Start", "type": "wav_position", "display_unit": "ms", "mode": "start", "filepath_param": "sample_file", "min": 0, "max": 5000, "step": 1 },
       { "key": "label", "name": "Label", "type": "string", "default": "Init" },
       { "key": "draw", "name": "Draw", "type": "canvas", "display_value_type": "percent", "trigger_value": "trigger" }
     ]

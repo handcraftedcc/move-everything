@@ -18,7 +18,7 @@ Branch: codex/shadow-ui-parameter-additions
 
 - `wav_position`
   - Supports waveform marker preview while editing.
-  - Supports `display_unit: percent|sec|ms`, `mode: trim_front|trim_end|position`, and `filepath_param` linking.
+  - Supports `display_unit: percent|sec|s|ms`, `mode: position|start|end` (legacy `trim_front`/`trim_end` aliases), and `filepath_param` linking.
 
 - `string`
   - Opens the shared on-screen keyboard text entry flow when edited.

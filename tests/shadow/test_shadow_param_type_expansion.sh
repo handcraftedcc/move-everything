@@ -69,6 +69,26 @@ if ! rg -F -q "function drawWavPositionPreview() {" "$shadow_file"; then
   exit 1
 fi
 
+if ! rg -F -q "function drawWavPositionEditor(selectedKey, selectedMeta) {" "$shadow_file"; then
+  echo "FAIL: wav_position edit-mode waveform renderer is missing" >&2
+  exit 1
+fi
+
+if ! rg -F -q "hierEditorEditMode && selectedMeta && selectedMeta.ui_type === \"wav_position\"" "$shadow_file"; then
+  echo "FAIL: wav_position waveform should only render while editing" >&2
+  exit 1
+fi
+
+if ! rg -F -q "modeRaw === \"trim_front\" || modeRaw === \"start\"" "$shadow_file"; then
+  echo "FAIL: wav_position start-mode alias mapping is missing" >&2
+  exit 1
+fi
+
+if ! rg -F -q "modeRaw === \"trim_end\" || modeRaw === \"end\"" "$shadow_file"; then
+  echo "FAIL: wav_position end-mode alias mapping is missing" >&2
+  exit 1
+fi
+
 if ! rg -F -q "function evaluateVisibilityCondition(condition, levelDef) {" "$shadow_file"; then
   echo "FAIL: visibility condition evaluator is missing" >&2
   exit 1
@@ -101,6 +121,16 @@ fi
 
 if ! rg -F -q "| \`wav_position\` | \`display_unit\`, \`mode\`, \`filepath_param\`, \`min\`, \`max\`, \`step\` |" "$docs_file"; then
   echo "FAIL: docs/MODULES.md is missing wav_position parameter type documentation" >&2
+  exit 1
+fi
+
+if ! rg -F -q "Waveform view opens only while the parameter is in edit mode" "$docs_file"; then
+  echo "FAIL: docs/MODULES.md is missing wav_position edit-mode waveform behavior" >&2
+  exit 1
+fi
+
+if ! rg -F -q "\`mode\`: \`position\`, \`start\`, \`end\`" "$docs_file"; then
+  echo "FAIL: docs/MODULES.md is missing wav_position mode guidance" >&2
   exit 1
 fi
 

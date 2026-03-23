@@ -1460,6 +1460,8 @@ const RATE_BARS_EVERY = [...Array(16)].map((_, i) => 16 - i);
 const WAV_PREVIEW_W = 120;
 const WAV_PREVIEW_H = 7;
 let wavDurationCache = {};
+let wavPositionWaveformCache = { signature: "", path: "", points: [], error: "" };
+let wavPositionWaveformErrorSignature = "";
 
 function parseMetaBool(value) {
     if (value === true || value === 1) return true;
@@ -1571,13 +1573,16 @@ function buildRateParamMeta(meta) {
 
 function buildWavPositionParamMeta(meta) {
     const displayUnitRaw = String(getMetaOption(meta, "display_unit", "percent")).toLowerCase();
-    const displayUnit = displayUnitRaw === "ms" || displayUnitRaw === "sec" ? displayUnitRaw : "percent";
+    const displayUnit = (displayUnitRaw === "ms" || displayUnitRaw === "sec" || displayUnitRaw === "s")
+        ? displayUnitRaw : "percent";
     const modeRaw = String(getMetaOption(meta, "mode", "position")).toLowerCase();
-    const mode = modeRaw === "trim_front" || modeRaw === "trim_end" ? modeRaw : "position";
+    const mode = (modeRaw === "trim_front" || modeRaw === "start")
+        ? "start"
+        : ((modeRaw === "trim_end" || modeRaw === "end") ? "end" : "position");
     const defaultMax = displayUnit === "percent" ? 100 : 1;
     const min = parseMetaNumber(getMetaOption(meta, "min", 0), 0);
     const max = parseMetaNumber(getMetaOption(meta, "max", defaultMax), defaultMax);
-    const defaultStep = displayUnit === "ms" ? 1 : (displayUnit === "sec" ? 0.01 : 1);
+    const defaultStep = displayUnit === "ms" ? 1 : ((displayUnit === "sec" || displayUnit === "s") ? 0.01 : 1);
     const step = parseMetaNumber(getMetaOption(meta, "step", defaultStep), defaultStep);
     const filepathParam = String(getMetaOption(meta, "filepath_param", "") || "");
     return {
@@ -1632,7 +1637,7 @@ function formatWavPositionDisplayValue(rawValue, meta) {
     if (!Number.isFinite(num)) return rawValue;
     const unit = String(meta && meta.display_unit || "percent").toLowerCase();
     if (unit === "ms") return `${Math.round(num)} ms`;
-    if (unit === "sec") return `${num.toFixed(3)} s`;
+    if (unit === "sec" || unit === "s") return `${num.toFixed(3)} s`;
 
     const min = parseMetaNumber(meta && meta.min, 0);
     const max = parseMetaNumber(meta && meta.max, 100);
@@ -7097,7 +7102,7 @@ function formatParamForSet(val, meta) {
     }
     if (meta && meta.ui_type === "wav_position") {
         if (meta.display_unit === "ms") return Math.round(val).toString();
-        if (meta.display_unit === "sec") return Number(val).toFixed(3);
+        if (meta.display_unit === "sec" || meta.display_unit === "s") return Number(val).toFixed(3);
         return Number(val).toFixed(2);
     }
     return val.toFixed(3);
@@ -7711,11 +7716,12 @@ function processPendingHierKnob() {
     const min = ctx.meta && typeof ctx.meta.min === "number" ? ctx.meta.min : 0;
     const max = ctx.meta && typeof ctx.meta.max === "number" ? ctx.meta.max : 1;
 
-    /* Calculate acceleration based on turn speed */
-    const accel = calcKnobAccel(knobIndex, isInt);
+    /* Shift provides fine control for wav_position editing. */
+    const fineWavEdit = !!(ctx.meta && ctx.meta.ui_type === "wav_position" && isShiftHeld());
+    const accel = fineWavEdit ? 1 : calcKnobAccel(knobIndex, isInt);
 
     /* Apply accumulated delta with acceleration and clamp */
-    const step = baseStep * accel;
+    const step = (fineWavEdit ? (baseStep / 5) : baseStep) * accel;
     const newVal = Math.max(min, Math.min(max, num + delta * step));
 
     /* Set the new value */
@@ -7793,12 +7799,64 @@ function getCachedWavDurationSec(filePath) {
     return seconds;
 }
 
+function normalizeWavPathString(path) {
+    if (!path) return "";
+    let value = String(path).trim();
+    if (value.startsWith("file://")) value = value.slice("file://".length);
+    if ((value.startsWith("\"") && value.endsWith("\"")) || (value.startsWith("'") && value.endsWith("'"))) {
+        value = value.slice(1, -1).trim();
+    }
+    return value;
+}
+
+function wavPositionPathExists(path) {
+    if (!path || typeof path !== "string") return false;
+    try {
+        const st = os.stat(path);
+        return !!(st && st[1] === 0);
+    } catch (e) {
+        return false;
+    }
+}
+
+function joinWavPath(base, leaf) {
+    if (!base) return leaf || "";
+    if (!leaf) return base;
+    const b = String(base).replace(/\/+$/, "");
+    const l = String(leaf).replace(/^\/+/, "");
+    return `${b}/${l}`;
+}
+
+function getWavPositionSourcePath(meta) {
+    const filepathParam = String(meta && meta.filepath_param || "").trim();
+    if (!filepathParam) return "";
+
+    const linkedKey = filepathParam.includes(":") ? filepathParam : buildHierarchyParamKey(filepathParam);
+    const rawPath = normalizeWavPathString(getSlotParam(hierEditorSlot, linkedKey) || "");
+    if (!rawPath) return "";
+    if (rawPath.startsWith("/") && wavPositionPathExists(rawPath)) return rawPath;
+    if (wavPositionPathExists(rawPath)) return rawPath;
+
+    const lookupKey = filepathParam.includes(":")
+        ? String(filepathParam.split(":").pop() || "").trim()
+        : filepathParam;
+    const sourceMeta = lookupKey ? (getParamMetadata(lookupKey) || {}) : {};
+    const candidates = [];
+    if (sourceMeta.start_path) candidates.push(joinWavPath(sourceMeta.start_path, rawPath));
+    if (sourceMeta.root) candidates.push(joinWavPath(sourceMeta.root, rawPath));
+
+    for (const candidate of candidates) {
+        if (wavPositionPathExists(candidate)) return candidate;
+    }
+    return rawPath;
+}
+
 function normalizeWavPositionRatio(rawValue, meta, durationSec) {
     const num = Number(rawValue);
     if (!Number.isFinite(num)) return 0;
 
     const unit = String(meta && meta.display_unit || "percent").toLowerCase();
-    if (unit === "sec") {
+    if (unit === "sec" || unit === "s") {
         if (!durationSec || durationSec <= 0) return 0;
         return Math.max(0, Math.min(1, num / durationSec));
     }
@@ -7814,37 +7872,419 @@ function normalizeWavPositionRatio(rawValue, meta, durationSec) {
     return Math.max(0, Math.min(1, (num - min) / span));
 }
 
-function getWavPositionPreviewData(fullKey, meta) {
-    const value = (hierEditorEditMode && hierEditorEditKey === fullKey && hierEditorEditValue !== null)
-        ? hierEditorEditValue
-        : getSlotParam(hierEditorSlot, fullKey);
-    const filepathParam = String(meta && meta.filepath_param || "").trim();
-    if (!filepathParam) {
-        return {
-            ok: false,
-            ratio: normalizeWavPositionRatio(value, meta, 0),
-            reason: "No file"
-        };
+function getWavPositionDisplayText(rawValue, meta, durationSec) {
+    const num = Number(rawValue);
+    if (!Number.isFinite(num)) return String(rawValue || "");
+
+    const unit = String(meta && meta.display_unit || "percent").toLowerCase();
+    if (unit === "ms") return `${Math.round(num)} ms`;
+    if (unit === "sec" || unit === "s") return `${num.toFixed(3)} s`;
+
+    const ratio = normalizeWavPositionRatio(num, meta, durationSec);
+    return `${(ratio * 100).toFixed(2)}%`;
+}
+
+function wavPositionGetBaseName(path) {
+    if (!path) return "";
+    const idx = path.lastIndexOf("/");
+    return idx >= 0 ? path.slice(idx + 1) : path;
+}
+
+function wavContentToBytes(content) {
+    if (!content) return null;
+    try {
+        if (content instanceof ArrayBuffer) {
+            return new Uint8Array(content);
+        }
+        if (typeof ArrayBuffer !== "undefined" &&
+            typeof ArrayBuffer.isView === "function" &&
+            ArrayBuffer.isView(content)) {
+            return new Uint8Array(content.buffer, content.byteOffset || 0, content.byteLength || 0);
+        }
+    } catch (e) {
+        /* Fall through to string handling. */
     }
 
-    const linkedKey = filepathParam.includes(":") ? filepathParam : buildHierarchyParamKey(filepathParam);
-    const wavPath = getSlotParam(hierEditorSlot, linkedKey) || "";
+    if (typeof content === "string") {
+        const bytes = new Uint8Array(content.length);
+        for (let i = 0; i < content.length; i++) {
+            bytes[i] = content.charCodeAt(i) & 0xff;
+        }
+        return bytes;
+    }
+    return null;
+}
+
+function wavByteAt(bytes, idx) {
+    if (!bytes || idx < 0 || idx >= bytes.length) return 0;
+    return bytes[idx] & 0xff;
+}
+
+function wavReadChunkId(bytes, idx) {
+    return String.fromCharCode(
+        wavByteAt(bytes, idx),
+        wavByteAt(bytes, idx + 1),
+        wavByteAt(bytes, idx + 2),
+        wavByteAt(bytes, idx + 3)
+    );
+}
+
+function wavReadU16LE(bytes, idx) {
+    return wavByteAt(bytes, idx) | (wavByteAt(bytes, idx + 1) << 8);
+}
+
+function wavReadS16LE(bytes, idx) {
+    const v = wavReadU16LE(bytes, idx);
+    return v > 0x7fff ? v - 0x10000 : v;
+}
+
+function wavReadU32LE(bytes, idx) {
+    return (wavByteAt(bytes, idx) |
+        (wavByteAt(bytes, idx + 1) << 8) |
+        (wavByteAt(bytes, idx + 2) << 16) |
+        (wavByteAt(bytes, idx + 3) << 24)) >>> 0;
+}
+
+function wavReadF32LE(bytes, idx) {
+    if (!bytes || idx < 0 || idx + 4 > bytes.length) return 0;
+    try {
+        const view = new DataView(bytes.buffer, bytes.byteOffset || 0, bytes.byteLength || bytes.length);
+        return view.getFloat32(idx, true);
+    } catch (e) {
+        return 0;
+    }
+}
+
+function wavFindRiffOffset(bytes) {
+    if (!bytes || bytes.length < 12) return -1;
+    if (wavReadChunkId(bytes, 0) === "RIFF" && wavReadChunkId(bytes, 8) === "WAVE") return 0;
+
+    const limit = Math.min(bytes.length - 12, 4096);
+    for (let i = 0; i <= limit; i++) {
+        if (wavReadChunkId(bytes, i) === "RIFF" && wavReadChunkId(bytes, i + 8) === "WAVE") {
+            return i;
+        }
+    }
+    return -1;
+}
+
+function parseWavPositionPeaks(content, width) {
+    const bytes = wavContentToBytes(content);
+    if (!bytes || bytes.length < 44) return { error: "file too small", points: [] };
+
+    const riffOffset = wavFindRiffOffset(bytes);
+    if (riffOffset < 0) return { error: "not a wav file", points: [] };
+
+    let fmtOffset = -1;
+    let dataOffset = -1;
+    let dataSize = 0;
+    let cursor = riffOffset + 12;
+
+    while (cursor + 8 <= bytes.length) {
+        const chunkId = wavReadChunkId(bytes, cursor);
+        const chunkSize = wavReadU32LE(bytes, cursor + 4);
+        const chunkData = cursor + 8;
+        const chunkEnd = chunkData + chunkSize;
+        const available = Math.max(0, bytes.length - chunkData);
+
+        if (chunkId === "fmt " && available >= 16) {
+            fmtOffset = chunkData;
+        } else if (chunkId === "data") {
+            dataOffset = chunkData;
+            dataSize = Math.min(chunkSize, available);
+            break;
+        }
+
+        if (chunkEnd <= chunkData || chunkEnd > bytes.length) break;
+        cursor = chunkEnd + (chunkSize % 2);
+    }
+
+    if (fmtOffset < 0 || dataOffset < 0 || dataSize <= 0) {
+        return { error: "missing wav chunks", points: [] };
+    }
+
+    const audioFmt = wavReadU16LE(bytes, fmtOffset);
+    const channels = Math.max(1, wavReadU16LE(bytes, fmtOffset + 2));
+    const bits = wavReadU16LE(bytes, fmtOffset + 14);
+    const blockAlign = Math.max(1, wavReadU16LE(bytes, fmtOffset + 12));
+    if (audioFmt !== 1 && audioFmt !== 3) return { error: "unsupported wav codec", points: [] };
+    if (!((audioFmt === 1 && (bits === 8 || bits === 16)) || (audioFmt === 3 && bits === 32))) {
+        return { error: "unsupported wav format", points: [] };
+    }
+
+    const sampleBytes = bits / 8;
+    const effectiveBlockAlign = blockAlign > 0 ? blockAlign : Math.max(1, channels * sampleBytes);
+    const frameCount = Math.max(1, Math.floor(dataSize / effectiveBlockAlign));
+    const points = new Array(width).fill(0);
+    const dataEnd = dataOffset + dataSize;
+
+    for (let x = 0; x < width; x++) {
+        const start = Math.floor((x * frameCount) / width);
+        const end = Math.max(start + 1, Math.floor(((x + 1) * frameCount) / width));
+        const span = end - start;
+        const stride = Math.max(1, Math.floor(span / 32));
+        let maxAbs = 0;
+
+        for (let frame = start; frame < end; frame += stride) {
+            const base = dataOffset + frame * effectiveBlockAlign;
+            if (base + sampleBytes > dataEnd) break;
+            let sample = 0;
+            if (audioFmt === 1 && bits === 16) {
+                sample = wavReadS16LE(bytes, base) / 32768;
+            } else if (audioFmt === 1 && bits === 8) {
+                sample = (wavByteAt(bytes, base) - 128) / 128;
+            } else if (audioFmt === 3 && bits === 32) {
+                sample = wavReadF32LE(bytes, base);
+            }
+            const abs = Math.abs(sample);
+            if (abs > maxAbs) maxAbs = abs;
+        }
+
+        points[x] = Math.max(0, Math.min(1, maxAbs));
+    }
+
+    return { error: "", points };
+}
+
+function getWavPositionWaveformPreview(path, width) {
+    if (!path) {
+        wavPositionWaveformCache = { signature: "", path: "", points: [], error: "select a wav file" };
+        return wavPositionWaveformCache;
+    }
+
+    let signature = `${path}:${width}`;
+    try {
+        const st = os.stat(path);
+        if (st && st[1] === 0 && st[0]) {
+            const size = st[0].size || 0;
+            const mtime = st[0].mtime || 0;
+            signature = `${path}:${size}:${mtime}:${width}`;
+        }
+    } catch (e) {
+        wavPositionWaveformCache = { signature: "", path, points: [], error: "file not found" };
+        return wavPositionWaveformCache;
+    }
+
+    if (wavPositionWaveformCache.signature === signature) {
+        return wavPositionWaveformCache;
+    }
+
+    let content = null;
+    const readBinaryWithStdOpen = function(filePath) {
+        let file = null;
+        try {
+            const st = os.stat(filePath);
+            if (!st || st[1] !== 0 || !st[0]) return null;
+            const size = Number(st[0].size || 0);
+            if (!(size > 0)) return null;
+
+            file = std.open(filePath, "rb");
+            if (!file) return null;
+
+            const buf = new ArrayBuffer(size);
+            let total = 0;
+            while (total < size) {
+                const n = file.read(buf, total, size - total);
+                if (!(n > 0)) break;
+                total += n;
+            }
+            file.close();
+            file = null;
+
+            if (total <= 0) return null;
+            const full = new Uint8Array(buf);
+            if (total === size) return full;
+            const out = new Uint8Array(total);
+            out.set(full.subarray(0, total));
+            return out;
+        } catch (e) {
+            if (file) {
+                try { file.close(); } catch (closeErr) {}
+            }
+            return null;
+        }
+    };
+
+    try {
+        content = readBinaryWithStdOpen(path);
+        if (!content) {
+            content = std.loadFile(path, "binary");
+            if (!content) {
+                content = std.loadFile(path);
+            }
+        }
+    } catch (e) {
+        content = null;
+    }
+
+    if (!content) {
+        wavPositionWaveformCache = { signature, path, points: [], error: "unable to read file" };
+        return wavPositionWaveformCache;
+    }
+
+    const parsed = parseWavPositionPeaks(content, width);
+    if (parsed.error) {
+        const sig = `${path}|${parsed.error}`;
+        if (wavPositionWaveformErrorSignature !== sig) {
+            wavPositionWaveformErrorSignature = sig;
+            debugLog(`wav_position parse error: ${parsed.error} path=${path}`);
+        }
+    } else {
+        wavPositionWaveformErrorSignature = "";
+    }
+
+    wavPositionWaveformCache = {
+        signature,
+        path,
+        points: parsed.points || [],
+        error: parsed.error || ""
+    };
+    return wavPositionWaveformCache;
+}
+
+function sampleWavPointAt(points, idxF) {
+    if (!Array.isArray(points) || points.length === 0) return 0;
+    const len = points.length;
+    const clamped = Math.max(0, Math.min(len - 1, idxF));
+    const i0 = Math.floor(clamped);
+    const i1 = Math.min(len - 1, i0 + 1);
+    const frac = clamped - i0;
+    const a = points[i0] || 0;
+    const b = points[i1] || a;
+    return (a * (1 - frac)) + (b * frac);
+}
+
+function sampleWavPointRange(points, startNorm, endNorm) {
+    if (!Array.isArray(points) || points.length === 0) return 0;
+    const len = points.length;
+    const start = Math.max(0, Math.min(1, startNorm));
+    const end = Math.max(start, Math.min(1, endNorm));
+    const startF = start * (len - 1);
+    const endF = end * (len - 1);
+    const span = Math.max(0, endF - startF);
+
+    if (span < 0.5) {
+        return sampleWavPointAt(points, (startF + endF) * 0.5);
+    }
+
+    const steps = Math.min(32, Math.max(8, Math.ceil(span)));
+    let maxAmp = 0;
+    for (let i = 0; i <= steps; i++) {
+        const t = i / steps;
+        const amp = sampleWavPointAt(points, startF + span * t);
+        if (amp > maxAmp) maxAmp = amp;
+    }
+    return Math.max(0, Math.min(1, maxAmp));
+}
+
+function getWavPositionPreviewData(fullKey, meta) {
+    const value = (hierEditorEditMode && hierEditorEditKey === fullKey && hierEditorEditValue !== null)
+        ? String(hierEditorEditValue)
+        : (getSlotParam(hierEditorSlot, fullKey) || "0");
+    const wavPath = getWavPositionSourcePath(meta);
     if (!wavPath) {
         return {
             ok: false,
             ratio: normalizeWavPositionRatio(value, meta, 0),
-            reason: "No file"
+            reason: "No file",
+            value
+        };
+    }
+
+    if (!wavPositionPathExists(wavPath)) {
+        return {
+            ok: false,
+            ratio: normalizeWavPositionRatio(value, meta, 0),
+            reason: "File missing",
+            path: wavPath,
+            value
         };
     }
 
     const durationSec = getCachedWavDurationSec(wavPath);
     return {
-        ok: durationSec > 0,
+        ok: true,
         ratio: normalizeWavPositionRatio(value, meta, durationSec),
         durationSec,
         path: wavPath,
-        mode: String(meta && meta.wav_mode || "position")
+        mode: String(meta && meta.wav_mode || "position").toLowerCase(),
+        value
     };
+}
+
+function drawWavPositionEditor(selectedKey, selectedMeta) {
+    hideOverlay();
+
+    const fullKey = buildHierarchyParamKey(selectedKey);
+    const preview = getWavPositionPreviewData(fullKey, selectedMeta);
+    const ratio = Math.max(0, Math.min(1, Number(preview.ratio) || 0));
+    const shiftHeld = isShiftHeld();
+    const zoomWindow = shiftHeld ? 0.1 : 1.0;
+    const zoomStart = Math.max(0, Math.min(1 - zoomWindow, ratio - (zoomWindow / 2)));
+    const zoomEnd = zoomStart + zoomWindow;
+    const zoomRange = Math.max(0.000001, zoomEnd - zoomStart);
+
+    const plotX = 3;
+    const plotY = 12;
+    const plotW = 122;
+    const plotH = 40;
+    const innerW = plotW - 2;
+    const midY = plotY + Math.floor(plotH / 2);
+    const cursorNorm = Math.max(0, Math.min(1, (ratio - zoomStart) / zoomRange));
+    const cursorX = plotX + 1 + Math.round(cursorNorm * (innerW - 1));
+
+    const label = selectedMeta && (selectedMeta.label || selectedMeta.name)
+        ? String(selectedMeta.label || selectedMeta.name)
+        : selectedKey;
+    const modeLabel = preview.mode === "start" ? "Start"
+        : (preview.mode === "end" ? "End" : "Position");
+    const valueText = `${modeLabel}: ${getWavPositionDisplayText(preview.value, selectedMeta, preview.durationSec)}${shiftHeld ? " [fine]" : ""}`;
+    const sourceText = wavPositionGetBaseName(preview.path || "") || "(no file)";
+
+    print(Math.max(0, Math.floor((SCREEN_WIDTH - label.length * 5) / 2)), 2, truncateText(label, 24), 1);
+    draw_rect(plotX, plotY, plotW, plotH, 1);
+
+    if (!preview.ok) {
+        const msg = preview.reason || "No WAV";
+        print(Math.max(0, Math.floor((SCREEN_WIDTH - msg.length * 5) / 2)), 30, truncateText(msg, 24), 1);
+    } else {
+        const previewWidth = Math.max(1024, innerW * (shiftHeld ? 24 : 8));
+        const waveform = getWavPositionWaveformPreview(preview.path, previewWidth);
+        if (waveform.error || waveform.points.length === 0) {
+            const msg = waveform.error || "no waveform";
+            print(Math.max(0, Math.floor((SCREEN_WIDTH - msg.length * 5) / 2)), 30, truncateText(msg, 24), 1);
+        } else {
+            const points = waveform.points;
+            for (let i = 0; i < innerW; i++) {
+                const colStartNorm = zoomStart + ((i / innerW) * zoomRange);
+                const colEndNorm = zoomStart + (((i + 1) / innerW) * zoomRange);
+                const amp = sampleWavPointRange(points, colStartNorm, colEndNorm);
+                const half = Math.floor(amp * (plotH - 4) / 2);
+                if (half <= 0) continue;
+                const x = plotX + 1 + i;
+                const top = Math.max(plotY + 1, midY - half);
+                const bottom = Math.min(plotY + plotH - 2, midY + half);
+                for (let y = top; y <= bottom; y++) {
+                    set_pixel(x, y, 1);
+                }
+            }
+        }
+    }
+
+    for (let y = plotY + 1; y < plotY + plotH - 1; y++) {
+        set_pixel(cursorX, y, 1);
+    }
+
+    if (preview.mode === "start") {
+        const width = Math.max(1, cursorX - (plotX + 1));
+        fill_rect(plotX + 1, plotY + plotH - 3, width, 2, 1);
+    } else if (preview.mode === "end") {
+        const width = Math.max(1, (plotX + plotW - 2) - cursorX + 1);
+        fill_rect(cursorX, plotY + plotH - 3, width, 2, 1);
+    }
+
+    print(2, 56, truncateText(valueText, 24), 1);
+    print(2, 48, truncateText(sourceText, 24), 1);
 }
 
 function drawWavPositionPreview() {
@@ -7852,31 +8292,7 @@ function drawWavPositionPreview() {
     if (!key) return;
     const meta = getParamMetadata(key);
     if (!meta || meta.ui_type !== "wav_position") return;
-
-    const fullKey = buildHierarchyParamKey(key);
-    const preview = getWavPositionPreviewData(fullKey, meta);
-    const x = 4;
-    const y = FOOTER_RULE_Y - WAV_PREVIEW_H - 1;
-    const markerX = x + Math.round((WAV_PREVIEW_W - 1) * Math.max(0, Math.min(1, preview.ratio || 0)));
-
-    draw_rect(x, y, WAV_PREVIEW_W, WAV_PREVIEW_H, 1);
-
-    if (!preview.ok) {
-        const label = truncateText(preview.reason || "No WAV", 14);
-        print(4, y - 8, label, 1);
-        return;
-    }
-
-    if (preview.mode === "trim_front") {
-        const w = Math.max(1, markerX - x);
-        fill_rect(x + 1, y + 1, Math.min(w, WAV_PREVIEW_W - 2), WAV_PREVIEW_H - 2, 1);
-    } else if (preview.mode === "trim_end") {
-        const start = Math.max(x + 1, markerX);
-        const width = Math.max(1, (x + WAV_PREVIEW_W - 1) - start);
-        fill_rect(start, y + 1, width, WAV_PREVIEW_H - 2, 1);
-    } else {
-        fill_rect(markerX, y + 1, 1, WAV_PREVIEW_H - 2, 1);
-    }
+    drawWavPositionEditor(key, meta);
 }
 
 function triggerCanvasParam(key, meta) {
@@ -8041,6 +8457,15 @@ function drawHierarchyEditor() {
         /* Footer hints - always push to edit (for swap/params) */
         drawFooter({left: "Push: edit", right: "Jog: browse"});
     } else {
+        const selectedKey = getSelectedHierarchyEditableKey();
+        const selectedMeta = selectedKey ? getParamMetadata(selectedKey) : null;
+
+        if (hierEditorEditMode && selectedMeta && selectedMeta.ui_type === "wav_position") {
+            drawWavPositionEditor(selectedKey, selectedMeta);
+            drawFooter({ left: "Push: done", right: "Jog: adjust" });
+            return;
+        }
+
         /* Draw param list */
         if (hierEditorParams.length === 0) {
             print(4, 24, "No parameters", 1);
@@ -8118,12 +8543,6 @@ function drawHierarchyEditor() {
                 prioritizeSelectedValue: true,
                 selectedMinLabelChars: 6
             });
-        }
-
-        const selectedKey = getSelectedHierarchyEditableKey();
-        const selectedMeta = selectedKey ? getParamMetadata(selectedKey) : null;
-        if (selectedMeta && selectedMeta.ui_type === "wav_position") {
-            drawWavPositionPreview();
         }
 
         /* Footer hints */
