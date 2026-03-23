@@ -1454,8 +1454,9 @@ const FILEPATH_BROWSER_FS = {
 
 const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
 const RATE_BASE_DENOMS = [1, 2, 4, 8, 16, 32, 64];
-const RATE_TRIPLET_DENOMS = [3, 6, 12, 24, 48];
-const RATE_BARS_POW2 = [1, 2, 4, 8, 16];
+const RATE_TRIPLET_BASE_DENOMS = [1, 2, 4, 8, 16, 32];
+const RATE_BARS_SIMPLE = [16, 8, 4, 2, 1];
+const RATE_BARS_EVERY = [...Array(16)].map((_, i) => 16 - i);
 const WAV_PREVIEW_W = 120;
 const WAV_PREVIEW_H = 7;
 let wavDurationCache = {};
@@ -1522,41 +1523,32 @@ function buildNoteParamMeta(meta) {
 function buildRateParamMeta(meta) {
     const includeBars = parseMetaBool(getMetaOption(meta, "include_bars", true));
     const includeTriplets = parseMetaBool(getMetaOption(meta, "include_triplets", true));
-    const includeEven = getMetaOption(meta, "include_even", undefined) === undefined
-        ? true : parseMetaBool(getMetaOption(meta, "include_even", true));
-    const includeOdd = getMetaOption(meta, "include_odd", undefined) === undefined
-        ? true : parseMetaBool(getMetaOption(meta, "include_odd", true));
-    const barsAll = parseMetaBool(getMetaOption(meta, "bars_all", false)) ||
-        String(getMetaOption(meta, "bars_mode", "")).toLowerCase() === "all";
+    const rawBarsMode = String(getMetaOption(meta, "bars_mode", "bars-simple")).toLowerCase();
+    let barsMode = rawBarsMode;
+    if (barsMode === "pow2") barsMode = "bars-simple";   /* legacy alias */
+    if (barsMode === "all") barsMode = "bars-every";     /* legacy alias */
+    if (barsMode !== "bars-simple" && barsMode !== "bars-every") {
+        barsMode = "bars-simple";
+    }
 
     const options = [];
     const pushRate = (val) => {
         if (options.indexOf(val) < 0) options.push(val);
     };
-    const parityAllowed = (n) => {
-        const isEven = (n % 2) === 0;
-        if (isEven && !includeEven) return false;
-        if (!isEven && !includeOdd) return false;
-        return true;
-    };
 
-    for (const denom of RATE_BASE_DENOMS) {
-        if (denom !== 1 && !parityAllowed(denom)) continue;
-        pushRate(`1/${denom}`);
-    }
-
-    if (includeTriplets) {
-        for (const denom of RATE_TRIPLET_DENOMS) {
-            if (!parityAllowed(denom)) continue;
-            pushRate(`1/${denom}T`);
+    if (includeBars) {
+        const bars = barsMode === "bars-every" ? RATE_BARS_EVERY : RATE_BARS_SIMPLE;
+        for (const count of bars) {
+            /* 1 bar maps to 1/1 so rates stay in one canonical ordering. */
+            if (count <= 1) pushRate("1/1");
+            else pushRate(`${count} bars`);
         }
     }
 
-    if (includeBars) {
-        const bars = barsAll ? [...Array(16)].map((_, i) => i + 1) : RATE_BARS_POW2;
-        for (const count of bars) {
-            if (!parityAllowed(count)) continue;
-            pushRate(count === 1 ? "1 bar" : `${count} bars`);
+    for (const denom of RATE_BASE_DENOMS) {
+        pushRate(`1/${denom}`);
+        if (includeTriplets && RATE_TRIPLET_BASE_DENOMS.indexOf(denom) >= 0) {
+            pushRate(`1/${denom}T`);
         }
     }
 
@@ -1568,6 +1560,7 @@ function buildRateParamMeta(meta) {
         ...meta,
         type: "enum",
         options,
+        bars_mode: barsMode,
         expanded_type: "rate"
     };
 }

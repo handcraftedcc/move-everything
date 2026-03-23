@@ -11,7 +11,9 @@ Branch: codex/shadow-ui-parameter-additions
 
 - `rate`
   - Generates musical division options from metadata.
-  - Supports `include_bars`, `bars_mode`, `include_triplets`, `include_even`, `include_odd`.
+  - Supports `include_bars`, `bars_mode`, `include_triplets`.
+  - `bars_mode` supports `bars-simple` (`16, 8, 4, 2, 1`) and `bars-every` (`16..1`).
+  - Options are emitted in musical-time order (slowest -> fastest).
 
 - `wav_position`
   - Supports waveform marker preview while editing.

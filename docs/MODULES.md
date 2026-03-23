@@ -621,10 +621,18 @@ Each entry in `params` is either:
 | `enum` | `options` | List of string options |
 | `mode` | `options` | Mode selector (like enum, triggers mode switch) |
 | `note` | `mode`, `min_note`, `max_note` | Generated note selector (`single` uses note names only, `multi` includes octaves) |
-| `rate` | `include_bars`, `bars_mode`, `include_triplets`, `include_even`, `include_odd` | Generated musical rate list (divisions, triplets, bars) |
+| `rate` | `include_bars`, `bars_mode`, `include_triplets` | Generated musical rate list (divisions, triplets, bars) |
 | `wav_position` | `display_unit`, `mode`, `filepath_param`, `min`, `max`, `step` | Numeric position/trim param with waveform preview and marker |
 | `string` | none (or `default`/`value`) | Opens on-screen text entry keyboard on edit |
 | `canvas` | `display_value_type`, `trigger_value` | Trigger-style parameter with configurable idle value formatting |
+
+`rate.bars_mode` values:
+- `bars-simple` (default): `16, 8, 4, 2, 1`
+- `bars-every`: every bar count from `16` down to `1`
+- Legacy aliases are still accepted: `pow2` -> `bars-simple`, `all` -> `bars-every`
+
+Rate options are emitted from slowest to fastest timing, for example:
+`16 bars, ... 2 bars, 1/1, 1/1T, 1/2, 1/2T, 1/4, ...`
 
 `visible_if` can be attached to level entries and param entries:
 
@@ -749,7 +757,7 @@ int get_param(void *instance, const char *key, char *buf, int buf_len) {
 | `module_picker` | `allow_none`, `allow_self`, `allowed_targets`, `param_key` | Dynamic enum from loaded chain components |
 | `parameter_picker` | `target_key`, `numeric_only`, `allow_none` | Dynamic enum from selected target's exposed params |
 | `note` | `mode`, `min_note`, `max_note` | Auto-generated note enum (centralized note naming in Shadow UI) |
-| `rate` | `include_bars`, `bars_mode`, `include_triplets`, `include_even`, `include_odd` | Auto-generated musical time-division enum |
+| `rate` | `include_bars`, `bars_mode`, `include_triplets` | Auto-generated musical time-division enum |
 | `wav_position` | `display_unit`, `mode`, `filepath_param`, `min`, `max`, `step` | Position/trim control with waveform preview |
 | `string` | `default`/`value` | Text value edited through on-screen keyboard |
 | `canvas` | `display_value_type`, `trigger_value`, `default`/`value` | Trigger-style parameter for custom canvas workflows |
@@ -821,7 +829,7 @@ These map to knobs 1-8 in the Shadow UI for quick access.
   "capabilities": {
     "chain_params": [
       { "key": "root_note", "name": "Root", "type": "note", "mode": "multi", "min_note": 24, "max_note": 96 },
-      { "key": "lfo_rate", "name": "Rate", "type": "rate", "include_bars": true, "bars_mode": "pow2", "include_triplets": true },
+      { "key": "lfo_rate", "name": "Rate", "type": "rate", "include_bars": true, "bars_mode": "bars-simple", "include_triplets": true },
       { "key": "sample_file", "name": "Sample", "type": "filepath", "root": "/data/UserData/UserLibrary/Samples", "filter": [".wav", ".aif"] },
       { "key": "start_ms", "name": "Start", "type": "wav_position", "display_unit": "ms", "mode": "trim_front", "filepath_param": "sample_file", "min": 0, "max": 5000, "step": 1 },
       { "key": "label", "name": "Label", "type": "string", "default": "Init" },

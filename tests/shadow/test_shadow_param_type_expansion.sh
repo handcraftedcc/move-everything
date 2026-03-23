@@ -24,6 +24,26 @@ if ! rg -F -q "function buildRateParamMeta(meta) {" "$shadow_file"; then
   exit 1
 fi
 
+if ! rg -F -q "bars-simple" "$shadow_file"; then
+  echo "FAIL: rate type is missing bars-simple mode support" >&2
+  exit 1
+fi
+
+if ! rg -F -q "bars-every" "$shadow_file"; then
+  echo "FAIL: rate type is missing bars-every mode support" >&2
+  exit 1
+fi
+
+if rg -F -q "include_even" "$shadow_file"; then
+  echo "FAIL: legacy include_even support should be removed from rate type" >&2
+  exit 1
+fi
+
+if rg -F -q "include_odd" "$shadow_file"; then
+  echo "FAIL: legacy include_odd support should be removed from rate type" >&2
+  exit 1
+fi
+
 if ! rg -F -q "function getWavPositionPreviewData(fullKey, meta) {" "$shadow_file"; then
   echo "FAIL: wav_position preview helper is missing" >&2
   exit 1
@@ -66,6 +86,21 @@ fi
 
 if ! rg -F -q "| \`wav_position\` | \`display_unit\`, \`mode\`, \`filepath_param\`, \`min\`, \`max\`, \`step\` |" "$docs_file"; then
   echo "FAIL: docs/MODULES.md is missing wav_position parameter type documentation" >&2
+  exit 1
+fi
+
+if ! rg -F -q "| \`rate\` | \`include_bars\`, \`bars_mode\`, \`include_triplets\` |" "$docs_file"; then
+  echo "FAIL: docs/MODULES.md is missing updated rate parameter fields" >&2
+  exit 1
+fi
+
+if rg -F -q "include_even" "$docs_file"; then
+  echo "FAIL: docs/MODULES.md should not mention include_even for rate type" >&2
+  exit 1
+fi
+
+if rg -F -q "include_odd" "$docs_file"; then
+  echo "FAIL: docs/MODULES.md should not mention include_odd for rate type" >&2
   exit 1
 fi
 
