@@ -7227,7 +7227,8 @@ function adjustHierSelectedParam(delta) {
     const isInt = meta && meta.type === "int";
     let step = meta && meta.step ? meta.step : (isInt ? 1 : 0.02);
     if (meta && meta.ui_type === "wav_position" && isShiftHeld()) {
-        step = 0.1;
+        const fineStep = Math.abs(step) * 0.1;
+        if (fineStep > 0) step = fineStep;
     }
     const min = meta && typeof meta.min === "number" ? meta.min : 0;
     const max = meta && typeof meta.max === "number" ? meta.max : 1;
@@ -7724,7 +7725,10 @@ function processPendingHierKnob() {
     const accel = fineWavEdit ? 1 : calcKnobAccel(knobIndex, isInt);
 
     /* Apply accumulated delta with acceleration and clamp */
-    const step = fineWavEdit ? 0.1 : (baseStep * accel);
+    const fineStep = Math.abs(baseStep) * 0.1;
+    const step = fineWavEdit
+        ? (fineStep > 0 ? fineStep : baseStep)
+        : (baseStep * accel);
     const newVal = Math.max(min, Math.min(max, num + delta * step));
 
     /* Set the new value */

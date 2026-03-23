@@ -89,8 +89,13 @@ if ! rg -F -q "if (meta && meta.ui_type === \"wav_position\" && isShiftHeld()) {
   exit 1
 fi
 
-if ! rg -F -q "const step = fineWavEdit ? 0.1 : (baseStep * accel);" "$shadow_file"; then
-  echo "FAIL: wav_position knob fine-step should be fixed at 0.1 with shift" >&2
+if ! rg -F -q "const fineStep = Math.abs(baseStep) * 0.1;" "$shadow_file"; then
+  echo "FAIL: wav_position knob fine-step should derive from base step" >&2
+  exit 1
+fi
+
+if ! rg -F -q "? (fineStep > 0 ? fineStep : baseStep)" "$shadow_file"; then
+  echo "FAIL: wav_position knob shift step should use base step * 0.1" >&2
   exit 1
 fi
 
