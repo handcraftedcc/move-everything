@@ -619,6 +619,9 @@ Each entry in `params` is either:
 | `int` | `min`, `max` | Integer value with knob control |
 | `float` | `min`, `max`, `step` | Float value (0.0-1.0 typical) |
 | `enum` | `options` | List of string options |
+| `filepath` | `root`, `start_path`, `filter` | Opens Shadow UI file browser and stores selected path |
+| `module_picker` | `allow_none`, `allow_self`, `allowed_targets`, `param_key` | Dynamic enum from loaded chain components |
+| `parameter_picker` | `target_key`, `numeric_only`, `allow_none` | Dynamic enum from selected target's exposed params |
 | `mode` | `options` | Mode selector (like enum, triggers mode switch) |
 | `note` | `mode`, `min_note`, `max_note` | Generated note selector (`single` uses note names only, `multi` includes octaves) |
 | `rate` | `include_bars`, `bars_mode`, `include_triplets` | Generated musical rate list (divisions, triplets, bars) |
@@ -752,19 +755,8 @@ int get_param(void *instance, const char *key, char *buf, int buf_len) {
 
 ### Parameter Types
 
-| Type | Fields | Description |
-|------|--------|-------------|
-| `int` | `min`, `max`, `default`/`value` | Integer value |
-| `float` | `min`, `max`, `default`/`value` | Float value |
-| `enum` | `options`, `default`/`value` | List of string options |
-| `filepath` | `root`, `start_path`, `filter`, `default`/`value` | Opens Shadow UI file browser and stores selected path |
-| `module_picker` | `allow_none`, `allow_self`, `allowed_targets`, `param_key` | Dynamic enum from loaded chain components |
-| `parameter_picker` | `target_key`, `numeric_only`, `allow_none` | Dynamic enum from selected target's exposed params |
-| `note` | `mode`, `min_note`, `max_note` | Auto-generated note enum (centralized note naming in Shadow UI) |
-| `rate` | `include_bars`, `bars_mode`, `include_triplets` | Auto-generated musical time-division enum |
-| `wav_position` | `display_unit`, `mode`, `filepath_param`, `min`, `max`, `step`, `shift_increment_multiplier` | Position/trim control with waveform preview |
-| `string` | `default`/`value` | Text value edited through on-screen keyboard |
-| `canvas` | `display_value_type`, `canvas_script`, `canvas_overlay`, `show_footer`, `show_value`, `default`/`value` | Fullscreen custom canvas workflow parameter |
+Use the canonical type list in `Shadow UI Parameter Hierarchy -> Parameter Types`.
+For `chain_params`, the same types apply, and `default`/`value` can be used to provide initial values.
 
 #### `filepath` in module.json
 

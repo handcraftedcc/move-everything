@@ -209,6 +209,26 @@ if ! rg -F -q "| \`note\` | \`mode\`, \`min_note\`, \`max_note\` |" "$docs_file"
   exit 1
 fi
 
+if ! rg -F -q "| \`filepath\` | \`root\`, \`start_path\`, \`filter\` |" "$docs_file"; then
+  echo "FAIL: docs/MODULES.md is missing filepath parameter type documentation" >&2
+  exit 1
+fi
+
+if ! rg -F -q "| \`module_picker\` | \`allow_none\`, \`allow_self\`, \`allowed_targets\`, \`param_key\` |" "$docs_file"; then
+  echo "FAIL: docs/MODULES.md is missing module_picker parameter type documentation" >&2
+  exit 1
+fi
+
+if ! rg -F -q "| \`parameter_picker\` | \`target_key\`, \`numeric_only\`, \`allow_none\` |" "$docs_file"; then
+  echo "FAIL: docs/MODULES.md is missing parameter_picker parameter type documentation" >&2
+  exit 1
+fi
+
+if ! rg -F -q "Use the canonical type list in \`Shadow UI Parameter Hierarchy -> Parameter Types\`." "$docs_file"; then
+  echo "FAIL: docs/MODULES.md should point chain_params to the canonical parameter type list" >&2
+  exit 1
+fi
+
 if ! rg -F -q "| \`wav_position\` | \`display_unit\`, \`mode\`, \`filepath_param\`, \`min\`, \`max\`, \`step\`, \`shift_increment_multiplier\` |" "$docs_file"; then
   echo "FAIL: docs/MODULES.md is missing wav_position parameter type documentation" >&2
   exit 1
