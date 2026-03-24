@@ -365,7 +365,7 @@ Modules expose parameters to the Shadow UI via `ui_hierarchy` in their get_param
 
 ### Chain Parameters
 
-Modules expose parameter metadata via `chain_params` in their get_param response. This is **required** for the Shadow UI to properly edit parameters (with correct step sizes, ranges, and enum options):
+Modules can expose additional parameter metadata via `chain_params` in their get_param response. The Shadow UI supports metadata from `ui_hierarchy` entries and from `chain_params` (useful for dynamic/state-dependent definitions):
 
 ```c
 if (strcmp(key, "chain_params") == 0) {
