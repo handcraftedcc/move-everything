@@ -139,6 +139,16 @@ if ! rg -F -q "function drawCanvasPreview() {" "$shadow_file"; then
   exit 1
 fi
 
+if ! rg -F -q "getMetaOption(meta, \"show_footer\", getMetaOption(meta, \"showfooter\", true))" "$shadow_file"; then
+  echo "FAIL: canvas show_footer/showfooter metadata parsing is missing" >&2
+  exit 1
+fi
+
+if ! rg -F -q "canvasParamMeta.show_footer !== false" "$shadow_file"; then
+  echo "FAIL: canvas footer visibility flag handling is missing" >&2
+  exit 1
+fi
+
 if ! rg -F -q "function dispatchCanvasMidi(data, source) {" "$shadow_file"; then
   echo "FAIL: canvas MIDI dispatch handler is missing" >&2
   exit 1
@@ -196,6 +206,11 @@ fi
 
 if ! rg -F -q "globalThis.canvas_overlay" "$docs_file"; then
   echo "FAIL: docs/MODULES.md should describe canvas overlay exports" >&2
+  exit 1
+fi
+
+if ! rg -F -q "\`show_footer\` (alias \`showfooter\`, default \`true\`)" "$docs_file"; then
+  echo "FAIL: docs/MODULES.md should describe canvas footer visibility metadata" >&2
   exit 1
 fi
 

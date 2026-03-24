@@ -1608,10 +1608,14 @@ function buildCanvasParamMeta(meta) {
     const displayTypeRaw = String(getMetaOption(meta, "display_value_type", "string")).toLowerCase();
     const displayValueType = (displayTypeRaw === "percent" || displayTypeRaw === "float" ||
         displayTypeRaw === "int") ? displayTypeRaw : "string";
+    const showFooter = parseMetaBool(
+        getMetaOption(meta, "show_footer", getMetaOption(meta, "showfooter", true))
+    );
     return {
         ...meta,
         type: "canvas",
         display_value_type: displayValueType,
+        show_footer: showFooter,
         expanded_type: "canvas"
     };
 }
@@ -8658,10 +8662,12 @@ function drawCanvasPreview() {
             valueText = formatHierDisplayValue(canvasParamKey, raw);
         }
     }
-    drawFooter({
-        left: truncateText(String(valueText || "-"), 20),
-        right: truncateText(title, 12)
-    });
+    if (!canvasParamMeta || canvasParamMeta.show_footer !== false) {
+        drawFooter({
+            left: truncateText(String(valueText || "-"), 20),
+            right: truncateText(title, 12)
+        });
+    }
 }
 
 /* Draw filepath browser for filepath chain params */

@@ -63,6 +63,9 @@ Branch: parameter-additions
   - left: current parameter value
   - right: parameter/file label
 - Background overlays are skipped while canvas is active so the canvas UI renders on a clean black background.
+- Added optional footer visibility metadata:
+  - `show_footer` (alias `showfooter`) defaults to `true`
+  - set to `false` for fully clean canvas rendering
 
 ### Trigger Logic Removal
 
