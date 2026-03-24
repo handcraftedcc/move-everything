@@ -7173,8 +7173,20 @@ function beginHierarchyParamEdit(key) {
     const liveVal = getSlotParam(hierEditorSlot, fullKey);
     if (baseVal === null && liveVal === null) return false;
 
+    let initialValue = (baseVal !== null) ? baseVal : liveVal;
+    if (meta && meta.ui_type === "wav_position" &&
+        getWavPositionMode(meta) === "end" &&
+        isEmptyParamValue(initialValue)) {
+        const wavPath = getWavPositionSourcePath(meta);
+        const durationSec = (wavPath && wavPositionPathExists(wavPath))
+            ? getCachedWavDurationSec(wavPath)
+            : 0;
+        initialValue = getWavPositionEndDefaultValue(meta, durationSec);
+        setSlotParam(hierEditorSlot, fullKey, String(initialValue));
+    }
+
     hierEditorEditKey = fullKey;
-    hierEditorEditValue = (baseVal !== null) ? baseVal : liveVal;
+    hierEditorEditValue = String(initialValue);
     return true;
 }
 
@@ -7892,6 +7904,37 @@ function getWavPositionDisplayText(rawValue, meta, durationSec) {
     return `${(ratio * 100).toFixed(2)}%`;
 }
 
+function isEmptyParamValue(rawValue) {
+    return rawValue === null || rawValue === undefined || String(rawValue).trim() === "";
+}
+
+function getWavPositionMode(meta) {
+    return String(meta && meta.wav_mode || "position").toLowerCase();
+}
+
+function getWavPositionEndDefaultValue(meta, durationSec) {
+    const unit = String(meta && meta.display_unit || "percent").toLowerCase();
+    if ((unit === "sec" || unit === "s") && durationSec > 0) {
+        return Number(durationSec).toFixed(3);
+    }
+    if (unit === "ms" && durationSec > 0) {
+        return String(Math.round(durationSec * 1000));
+    }
+
+    if (unit === "sec" || unit === "s") {
+        const fallback = parseMetaNumber(meta && meta.max, 1);
+        return Number(fallback).toFixed(3);
+    }
+    if (unit === "ms") {
+        const fallback = parseMetaNumber(meta && meta.max, 1);
+        return String(Math.round(fallback));
+    }
+
+    const min = parseMetaNumber(meta && meta.min, 0);
+    const max = parseMetaNumber(meta && meta.max, 100);
+    return String(Math.max(min, max));
+}
+
 function wavPositionGetBaseName(path) {
     if (!path) return "";
     const idx = path.lastIndexOf("/");
@@ -8186,10 +8229,24 @@ function sampleWavPointRange(points, startNorm, endNorm) {
 }
 
 function getWavPositionPreviewData(fullKey, meta) {
-    const value = (hierEditorEditMode && hierEditorEditKey === fullKey && hierEditorEditValue !== null)
+    let value = (hierEditorEditMode && hierEditorEditKey === fullKey && hierEditorEditValue !== null)
         ? String(hierEditorEditValue)
-        : (getSlotParam(hierEditorSlot, fullKey) || "0");
+        : (getSlotParam(hierEditorSlot, fullKey) || "");
+    const mode = getWavPositionMode(meta);
     const wavPath = getWavPositionSourcePath(meta);
+    let durationSec = 0;
+    if (wavPath && wavPositionPathExists(wavPath)) {
+        durationSec = getCachedWavDurationSec(wavPath);
+    }
+
+    if (mode === "end" && isEmptyParamValue(value)) {
+        value = getWavPositionEndDefaultValue(meta, durationSec);
+        setSlotParam(hierEditorSlot, fullKey, String(value));
+        if (hierEditorEditMode && hierEditorEditKey === fullKey) {
+            hierEditorEditValue = String(value);
+        }
+    }
+
     if (!wavPath) {
         return {
             ok: false,
@@ -8209,13 +8266,12 @@ function getWavPositionPreviewData(fullKey, meta) {
         };
     }
 
-    const durationSec = getCachedWavDurationSec(wavPath);
     return {
         ok: true,
         ratio: normalizeWavPositionRatio(value, meta, durationSec),
         durationSec,
         path: wavPath,
-        mode: String(meta && meta.wav_mode || "position").toLowerCase(),
+        mode,
         value
     };
 }
@@ -8272,11 +8328,13 @@ function drawWavPositionEditor(selectedKey, selectedMeta) {
                 const half = Math.floor(amp * (plotH - 4) / 2);
                 if (half <= 0) continue;
                 const x = plotX + 1 + i;
-                if (mode === "start" && x > cursorX) continue;
-                if (mode === "end" && x < cursorX) continue;
                 const top = Math.max(plotY + 1, midY - half);
                 const bottom = Math.min(plotY + plotH - 2, midY + half);
-                if (mode === "position") {
+                let outline = false;
+                if (mode === "start" && x <= cursorX) outline = true;
+                if (mode === "end" && x >= cursorX) outline = true;
+
+                if (!outline) {
                     for (let y = top; y <= bottom; y++) {
                         set_pixel(x, y, 1);
                     }
