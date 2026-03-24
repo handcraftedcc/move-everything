@@ -101,6 +101,12 @@ Branch: parameter-additions
   - WAV duration for `ms` / `sec` modes
 - This keeps the value in the parameter list in sync without requiring the user to enter the wav editor first.
 
+### Update: 2026-03-24 (Linked End Defaults Follow-Up)
+
+- Removed editor-open side effect for end defaults; initialization is now tied to filepath selection sync only.
+- Expanded linked end-default sync to scan hierarchy levels (not only the active level), improving cross-level linking behavior.
+- Refined `docs/MODULES.md` with dedicated `wav_position` and `canvas` field sections for cohesive module-author guidance.
+
 ### Install Status
 
 - Built and installed from `parameter-additions` using:

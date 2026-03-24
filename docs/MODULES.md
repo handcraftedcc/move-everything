@@ -822,6 +822,46 @@ Behavior notes:
 - For pad samplers, you can suspend auto-pad switching while browsing by adding `{"key":"ui_auto_select_pad","value":"off","restore":true}` to `browser_hooks.on_open`.
 - Example user sample file path: `/data/UserData/UserLibrary/Samples/Drums/Kick01.wav`.
 
+#### `wav_position` in module.json
+
+Use `type: "wav_position"` for numeric position/trim controls with waveform visualization in edit mode.
+
+`wav_position` fields:
+
+- `key` (required): Parameter key passed to `set_param`.
+- `name` (required): Label shown in Shadow UI.
+- `type` (required): Must be `"wav_position"`.
+- `display_unit` (optional): `percent`, `ms`, `sec`/`s` (default `percent`).
+- `mode` (optional): `position`, `start`, `end` (legacy aliases: `trim_front`, `trim_end`).
+- `filepath_param` (recommended): Key of the linked filepath parameter containing the WAV source.
+- `min`, `max`, `step` (optional): Numeric range and increment for editing.
+- `shift_increment_multiplier` (optional): Multiplier for Shift fine-step (default `0.1`; alias `shift_step_multiplier`).
+
+Behavior notes:
+
+- Waveform UI is shown only while the parameter is in edit mode.
+- `mode: start` and `mode: end` use side-aware waveform rendering for trim workflows.
+- On filepath selection commit, empty linked `mode: end` params are initialized to file end (`100%` in percent mode, WAV duration for `ms`/`sec`).
+
+#### `canvas` in module.json
+
+Use `type: "canvas"` to open a module-defined fullscreen canvas UI from the hierarchy editor.
+
+`canvas` fields:
+
+- `key` (required): Parameter key passed to `set_param`.
+- `name` (required): Label shown in Shadow UI.
+- `type` (required): Must be `"canvas"`.
+- `display_value_type` (optional): `string`, `int`, `float`, or `percent` formatting for value display.
+- `canvas_script` (optional): Script path relative to module root (default `canvas.js`), supports `file.js#overlay_name`.
+- `canvas_overlay` (optional): Named overlay object selector (aliases: `canvas_target`, `overlay`).
+- `show_footer` (optional): Show/hide footer in canvas view (default `true`; alias `showfooter`).
+
+Behavior notes:
+
+- Clicking the parameter enters a dedicated fullscreen canvas view.
+- The loaded script should expose `globalThis.canvas_overlay` (or `globalThis.canvas_overlays`) with hooks such as `onOpen`, `onMidi`, `tick`, `draw`, `onClose`, `onExit`.
+
 #### Dynamic Target Pickers
 
 Use `module_picker` and `parameter_picker` for chain-aware target routing without custom UI code.

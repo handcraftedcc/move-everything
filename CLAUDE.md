@@ -378,8 +378,16 @@ if (strcmp(key, "chain_params") == 0) {
 }
 ```
 
-Parameter types: `float` (with `min`, `max`, `step`), `int` (with `min`, `max`), `enum` (with `options` array).
-Optional fields: `default`, `unit`, `display_format`.
+Parameter types include:
+- `float` (with `min`, `max`, `step`)
+- `int` (with `min`, `max`)
+- `enum` (with `options` array)
+- `mode`, `note`, `rate`
+- `filepath`, `module_picker`, `parameter_picker`
+- `wav_position`, `canvas`, `string`
+
+Optional fields commonly include: `default`, `unit`, `display_format`.
+For field-level details and examples for each type, use `docs/MODULES.md` as the source of truth.
 
 These provide metadata for the Shadow UI parameter editor alongside `ui_hierarchy` (which defines menu structure and knob mappings).
 
