@@ -624,7 +624,7 @@ Each entry in `params` is either:
 | `rate` | `include_bars`, `bars_mode`, `include_triplets` | Generated musical rate list (divisions, triplets, bars) |
 | `wav_position` | `display_unit`, `mode`, `filepath_param`, `min`, `max`, `step` | Numeric position/trim param with waveform preview and marker |
 | `string` | none (or `default`/`value`) | Opens on-screen text entry keyboard on edit |
-| `canvas` | `display_value_type`, `trigger_value` | Trigger-style parameter with configurable idle value formatting |
+| `canvas` | `display_value_type`, `canvas_script`, `canvas_overlay` | Opens fullscreen module-defined canvas UI when clicked |
 
 `rate.bars_mode` values:
 - `bars-every` (default): every bar count from `16` down to `1`
@@ -639,6 +639,12 @@ Rate options are emitted from slowest to fastest timing, for example:
 - `filepath_param` points to the source filepath parameter used to load waveform data.
 - `display_unit`: `percent`, `ms`, `sec` (alias: `s`).
 - `mode`: `position`, `start`, `end` (legacy aliases: `trim_front` -> `start`, `trim_end` -> `end`).
+
+`canvas` behavior:
+- Clicking a canvas parameter opens a fullscreen canvas view; click or Back exits to the hierarchy editor.
+- `canvas_script` selects the module-relative script to load (default `canvas.js`). You can use `file.js#overlay_name` to target a specific overlay.
+- `canvas_overlay` (or `canvas_target`/`overlay`) selects a named overlay object if your script exports multiple overlays.
+- Canvas scripts should publish `globalThis.canvas_overlay` (or `globalThis.canvas_overlays`) with optional hooks: `onOpen`, `onMidi`, `tick`, `draw`, `onClose`, `onExit`.
 
 `visible_if` can be attached to level entries and param entries:
 
@@ -766,7 +772,7 @@ int get_param(void *instance, const char *key, char *buf, int buf_len) {
 | `rate` | `include_bars`, `bars_mode`, `include_triplets` | Auto-generated musical time-division enum |
 | `wav_position` | `display_unit`, `mode`, `filepath_param`, `min`, `max`, `step` | Position/trim control with waveform preview |
 | `string` | `default`/`value` | Text value edited through on-screen keyboard |
-| `canvas` | `display_value_type`, `trigger_value`, `default`/`value` | Trigger-style parameter for custom canvas workflows |
+| `canvas` | `display_value_type`, `canvas_script`, `canvas_overlay`, `default`/`value` | Fullscreen custom canvas workflow parameter |
 
 #### `filepath` in module.json
 
@@ -839,7 +845,7 @@ These map to knobs 1-8 in the Shadow UI for quick access.
       { "key": "sample_file", "name": "Sample", "type": "filepath", "root": "/data/UserData/UserLibrary/Samples", "filter": [".wav", ".aif"] },
       { "key": "start_ms", "name": "Start", "type": "wav_position", "display_unit": "ms", "mode": "start", "filepath_param": "sample_file", "min": 0, "max": 5000, "step": 1 },
       { "key": "label", "name": "Label", "type": "string", "default": "Init" },
-      { "key": "draw", "name": "Draw", "type": "canvas", "display_value_type": "percent", "trigger_value": "trigger" }
+      { "key": "draw", "name": "Draw", "type": "canvas", "display_value_type": "percent", "canvas_script": "canvas.js#draw_overlay", "canvas_overlay": "draw_overlay" }
     ]
   }
 }

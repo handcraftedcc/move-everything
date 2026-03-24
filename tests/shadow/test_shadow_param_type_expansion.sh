@@ -124,13 +124,28 @@ if ! rg -F -q "meta && meta.type === \"string\"" "$shadow_file"; then
   exit 1
 fi
 
-if ! rg -F -q "function triggerCanvasParam(key, meta) {" "$shadow_file"; then
-  echo "FAIL: canvas trigger handler is missing" >&2
+if ! rg -F -q "meta && meta.type === \"canvas\"" "$shadow_file"; then
+  echo "FAIL: canvas parameter handling is missing" >&2
   exit 1
 fi
 
-if ! rg -F -q "meta && meta.type === \"canvas\"" "$shadow_file"; then
-  echo "FAIL: canvas parameter handling is missing" >&2
+if ! rg -F -q "function openCanvasPreview(paramKey, meta) {" "$shadow_file"; then
+  echo "FAIL: canvas open-preview handler is missing" >&2
+  exit 1
+fi
+
+if ! rg -F -q "function drawCanvasPreview() {" "$shadow_file"; then
+  echo "FAIL: canvas preview renderer is missing" >&2
+  exit 1
+fi
+
+if ! rg -F -q "function dispatchCanvasMidi(data, source) {" "$shadow_file"; then
+  echo "FAIL: canvas MIDI dispatch handler is missing" >&2
+  exit 1
+fi
+
+if ! rg -F -q "setView(VIEWS.CANVAS);" "$shadow_file"; then
+  echo "FAIL: canvas parameter should transition into dedicated canvas view" >&2
   exit 1
 fi
 
@@ -171,6 +186,16 @@ fi
 
 if ! rg -F -q "1 bar, 1/1T, 1/2, 1/2T, 1/4" "$docs_file"; then
   echo "FAIL: docs/MODULES.md should describe 1 bar replacing 1/1 in rate ordering" >&2
+  exit 1
+fi
+
+if ! rg -F -q "\`canvas_script\` selects the module-relative script to load" "$docs_file"; then
+  echo "FAIL: docs/MODULES.md should describe canvas_script behavior" >&2
+  exit 1
+fi
+
+if ! rg -F -q "globalThis.canvas_overlay" "$docs_file"; then
+  echo "FAIL: docs/MODULES.md should describe canvas overlay exports" >&2
   exit 1
 fi
 
