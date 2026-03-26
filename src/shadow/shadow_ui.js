@@ -209,6 +209,7 @@ let overtakeJogDelta = 0;                             // Accumulated delta for j
 const CONFIG_PATH = "/data/UserData/schwung/shadow_chain_config.json";
 const PATCH_DIR = "/data/UserData/schwung/patches";
 const SLOT_STATE_DIR_DEFAULT = "/data/UserData/schwung/slot_state";
+const MASTER_FX_LFO_STATE_FILE = "master_fx_lfos.json";
 let activeSlotStateDir = SLOT_STATE_DIR_DEFAULT;
 const AUTOSAVE_INTERVAL = 300;  /* ~10 seconds at 30fps */
 const DEFAULT_SLOTS = [
@@ -3203,6 +3204,7 @@ function loadMasterPreset(index, presetName) {
                 if (lfoConfig.target) shadow_set_param(0, pfx + "target", lfoConfig.target);
                 if (lfoConfig.target_param) shadow_set_param(0, pfx + "target_param", lfoConfig.target_param);
                 shadow_set_param(0, pfx + "shape", String(lfoConfig.shape || 0));
+                shadow_set_param(0, pfx + "polarity", String(lfoConfig.polarity || 0));
                 shadow_set_param(0, pfx + "sync", String(lfoConfig.sync || 0));
                 shadow_set_param(0, pfx + "rate_hz", String(lfoConfig.rate_hz || 1.0));
                 shadow_set_param(0, pfx + "rate_div", String(lfoConfig.rate_div || 3));
@@ -4462,6 +4464,94 @@ function applyMasterFxModuleSelection() {
     needsRedraw = true;
 }
 
+function getMasterFxLfoStatePath() {
+    return activeSlotStateDir + "/" + MASTER_FX_LFO_STATE_FILE;
+}
+
+function applyMasterFxLfoConfig(li, lfoConfig) {
+    if (typeof shadow_set_param !== "function") return;
+    const cfg = (lfoConfig && typeof lfoConfig === "object") ? lfoConfig : {};
+    const pfx = "master_fx:lfo" + li + ":";
+    const shape = Number.isFinite(Number(cfg.shape)) ? Number(cfg.shape) : 0;
+    const polarity = Number.isFinite(Number(cfg.polarity)) ? Number(cfg.polarity) : 0;
+    const sync = Number.isFinite(Number(cfg.sync)) ? Number(cfg.sync) : 0;
+    const rateHz = Number.isFinite(Number(cfg.rate_hz)) ? Number(cfg.rate_hz) : 1.0;
+    const rateDiv = Number.isFinite(Number(cfg.rate_div)) ? Number(cfg.rate_div) : 3;
+    const depth = Number.isFinite(Number(cfg.depth)) ? Number(cfg.depth) : 0;
+    const phaseOffset = Number.isFinite(Number(cfg.phase_offset)) ? Number(cfg.phase_offset) : 0;
+    const enabled = Number.isFinite(Number(cfg.enabled)) ? Number(cfg.enabled) : 0;
+    const target = typeof cfg.target === "string" ? cfg.target : "";
+    const targetParam = typeof cfg.target_param === "string" ? cfg.target_param : "";
+
+    shadow_set_param(0, pfx + "target", target);
+    shadow_set_param(0, pfx + "target_param", targetParam);
+    shadow_set_param(0, pfx + "shape", String(shape));
+    shadow_set_param(0, pfx + "polarity", String(polarity));
+    shadow_set_param(0, pfx + "sync", String(sync));
+    shadow_set_param(0, pfx + "rate_hz", String(rateHz));
+    shadow_set_param(0, pfx + "rate_div", String(rateDiv));
+    shadow_set_param(0, pfx + "depth", String(depth));
+    shadow_set_param(0, pfx + "phase_offset", String(phaseOffset));
+    shadow_set_param(0, pfx + "enabled", String(enabled));
+}
+
+function snapshotMasterFxLfoState() {
+    const lfoState = {};
+    if (typeof shadow_get_param !== "function") return lfoState;
+    for (let li = 1; li <= 2; li++) {
+        try {
+            const configJson = shadow_get_param(0, "master_fx:lfo" + li + ":config");
+            if (!configJson) continue;
+            lfoState["lfo" + li] = JSON.parse(configJson);
+        } catch (e) {}
+    }
+    return lfoState;
+}
+
+function saveMasterFxLfoStateToFile() {
+    try {
+        const lfoState = snapshotMasterFxLfoState();
+        host_write_file(getMasterFxLfoStatePath(), JSON.stringify(lfoState, null, 2) + "\n");
+    } catch (e) {}
+}
+
+function loadMasterFxLfoStateFromFile(stateDir, resetIfMissing, legacyMasterFxChain) {
+    const baseDir = stateDir || activeSlotStateDir || SLOT_STATE_DIR_DEFAULT;
+    const statePath = baseDir + "/" + MASTER_FX_LFO_STATE_FILE;
+    let loaded = false;
+
+    if (host_file_exists(statePath)) {
+        try {
+            const raw = host_read_file(statePath);
+            if (raw) {
+                const data = JSON.parse(raw);
+                for (let li = 1; li <= 2; li++) {
+                    applyMasterFxLfoConfig(li, data["lfo" + li]);
+                }
+                loaded = true;
+                debugLog("MFX LFO: loaded per-set state from " + statePath);
+            }
+        } catch (e) {}
+    }
+
+    if (!loaded && legacyMasterFxChain && typeof legacyMasterFxChain === "object") {
+        let restoredLegacy = false;
+        for (let li = 1; li <= 2; li++) {
+            const lfoConfig = legacyMasterFxChain["lfo" + li];
+            if (!lfoConfig || typeof lfoConfig !== "object") continue;
+            applyMasterFxLfoConfig(li, lfoConfig);
+            restoredLegacy = true;
+        }
+        loaded = restoredLegacy;
+    }
+
+    if (!loaded && resetIfMissing) {
+        for (let li = 1; li <= 2; li++) {
+            applyMasterFxLfoConfig(li, null);
+        }
+    }
+}
+
 /* Save master FX chain configuration */
 function saveMasterFxChainConfig() {
     /* The shim persists the state, but we also save to shadow config */
@@ -4567,17 +4657,15 @@ function saveMasterFxChainConfig() {
         config.link_audio_routing = cachedLinkAudioRouting;
         config.link_audio_publish = cachedLinkAudioPublish;
 
-        /* Save master FX LFO configs */
-        if (typeof shadow_get_param === "function") {
-            for (let li = 1; li <= 2; li++) {
-                try {
-                    const configJson = shadow_get_param(0, "master_fx:lfo" + li + ":config");
-                    if (configJson) {
-                        config.master_fx_chain["lfo" + li] = JSON.parse(configJson);
-                    }
-                } catch (e) {}
+        /* Save master FX LFO configs (legacy global + per-set file) */
+        const lfoState = snapshotMasterFxLfoState();
+        for (let li = 1; li <= 2; li++) {
+            const key = "lfo" + li;
+            if (lfoState[key]) {
+                config.master_fx_chain[key] = lfoState[key];
             }
         }
+        saveMasterFxLfoStateToFile();
 
         host_write_file(configPath, JSON.stringify(config, null, 2));
     } catch (e) {
@@ -4780,25 +4868,7 @@ function loadMasterFxChainFromConfig() {
             } catch (e) {}
         }
 
-        /* Restore master FX LFO configs from shadow_config */
-        if (config.master_fx_chain && typeof shadow_set_param === "function") {
-            for (let li = 1; li <= 2; li++) {
-                const lfoConfig = config.master_fx_chain["lfo" + li];
-                if (lfoConfig) {
-                    const pfx = "master_fx:lfo" + li + ":";
-                    if (lfoConfig.target) shadow_set_param(0, pfx + "target", lfoConfig.target);
-                    if (lfoConfig.target_param) shadow_set_param(0, pfx + "target_param", lfoConfig.target_param);
-                    shadow_set_param(0, pfx + "shape", String(lfoConfig.shape || 0));
-                    shadow_set_param(0, pfx + "sync", String(lfoConfig.sync || 0));
-                    shadow_set_param(0, pfx + "rate_hz", String(lfoConfig.rate_hz || 1.0));
-                    shadow_set_param(0, pfx + "rate_div", String(lfoConfig.rate_div || 3));
-                    shadow_set_param(0, pfx + "depth", String(lfoConfig.depth || 0));
-                    shadow_set_param(0, pfx + "phase_offset", String(lfoConfig.phase_offset || 0));
-                    shadow_set_param(0, pfx + "enabled", String(lfoConfig.enabled || 0));
-                    debugLog(`MFX LFO ${li}: restored target=${lfoConfig.target || "none"}`);
-                }
-            }
-        }
+        loadMasterFxLfoStateFromFile(activeSlotStateDir, false, config.master_fx_chain);
     } catch (e) {
         /* Ignore errors */
     }
@@ -6740,6 +6810,24 @@ function buildHierarchyParamKey(key) {
     return `${prefix}:${key}`;
 }
 
+function getHierarchyDisplayRawValue(slot, fullKey) {
+    const baseVal = getSlotParam(slot, `${fullKey}:base`);
+    if (baseVal !== null && baseVal !== undefined) return baseVal;
+    return getSlotParam(slot, fullKey);
+}
+
+function isHierarchyParamModulated(slot, fullKey) {
+    const modulated = getSlotParam(slot, `${fullKey}:modulated`);
+    if (modulated === "1") return true;
+    if (modulated === "0") return false;
+
+    /* Fallback for targets that don't implement :modulated. */
+    const baseVal = getSlotParam(slot, `${fullKey}:base`);
+    if (baseVal === null || baseVal === undefined) return false;
+    const liveVal = getSlotParam(slot, fullKey);
+    return liveVal !== null && liveVal !== undefined && liveVal !== baseVal;
+}
+
 function resetHierarchyEditState() {
     hierEditorEditKey = "";
     hierEditorEditValue = null;
@@ -7106,13 +7194,14 @@ function showKnobOverlay(knobIndex, value) {
             showOverlay(`Knob ${knobIndex + 1}`, "not mapped");
         } else if (ctx.fullKey) {
             /* Mapped knob - show value */
+            const title = isHierarchyParamModulated(ctx.slot, ctx.fullKey) ? `${ctx.title}~` : ctx.title;
             let displayVal;
             const isEnum = ctx.meta && (ctx.meta.type === "enum" || ctx.meta.type === "bool");
             if (value !== undefined) {
                 /* For enums, show string directly; for numbers, format */
                 displayVal = isEnum ? String(value) : formatParamForOverlay(value, ctx.meta);
             } else {
-                const currentVal = getSlotParam(ctx.slot, ctx.fullKey);
+                const currentVal = getHierarchyDisplayRawValue(ctx.slot, ctx.fullKey);
                 /* For enums, show string directly; for numbers, parse and format */
                 if (isEnum) {
                     if (isTriggerEnumMeta(ctx.meta)) {
@@ -7125,7 +7214,7 @@ function showKnobOverlay(knobIndex, value) {
                     displayVal = !isNaN(num) ? formatParamForOverlay(num, ctx.meta) : (currentVal || "-");
                 }
             }
-            showOverlay(ctx.title, displayVal);
+            showOverlay(title, displayVal);
         }
         needsRedraw = true;
         return true;
@@ -7187,22 +7276,7 @@ function processPendingHierKnob() {
     if (pendingHierKnobIndex < 0 || pendingHierKnobDelta === 0) {
         /* No pending adjustment, but still show overlay if knob active */
         if (pendingHierKnobIndex >= 0) {
-            const ctx = getKnobContext(pendingHierKnobIndex);
-            if (ctx && ctx.fullKey) {
-                const currentVal = getSlotParam(ctx.slot, ctx.fullKey);
-                if (currentVal !== null) {
-                    /* For enums, pass string directly; for numbers, parse */
-                    if (ctx.meta && (ctx.meta.type === "enum" || ctx.meta.type === "bool")) {
-                        if (isTriggerEnumMeta(ctx.meta)) {
-                            showOverlay(ctx.title, getTriggerEnumOverlayValue(pendingHierKnobIndex));
-                        } else {
-                            showOverlay(ctx.title, currentVal);
-                        }
-                    } else {
-                        showKnobOverlay(pendingHierKnobIndex, parseFloat(currentVal));
-                    }
-                }
-            }
+            showKnobOverlay(pendingHierKnobIndex);
         }
         return;
     }
@@ -7215,8 +7289,10 @@ function processPendingHierKnob() {
     debugLog(`processPendingHierKnob: ctx=${ctx ? JSON.stringify({slot: ctx.slot, key: ctx.key, fullKey: ctx.fullKey, noMapping: ctx.noMapping, meta: ctx.meta ? 'present' : 'null'}) : 'null'}`);
     if (!ctx || ctx.noMapping || !ctx.fullKey) return;
 
-    /* Get current value */
-    const currentVal = getSlotParam(ctx.slot, ctx.fullKey);
+    /* Use stable base value when modulation is active, matching jog edit mode.
+     * Fallback to live value when no base value is available. */
+    const baseVal = getSlotParam(ctx.slot, `${ctx.fullKey}:base`);
+    const currentVal = (baseVal !== null) ? baseVal : getSlotParam(ctx.slot, ctx.fullKey);
     debugLog(`processPendingHierKnob: currentVal=${currentVal}`);
     if (currentVal === null) return;
 
@@ -7512,6 +7588,7 @@ function drawHierarchyEditor() {
 
                 const meta = getParamMetadata(key);
                 const label = meta && meta.name ? meta.name : key.replace(/_/g, " ");
+                let displayLabel = label;
 
                 /* Only fetch param value if this item is visible on screen */
                 let displayVal = "";
@@ -7519,10 +7596,13 @@ function drawHierarchyEditor() {
                     const fullKey = buildHierarchyParamKey(key);
                     const usingStableEditVal = hierEditorEditMode &&
                                                hierEditorEditKey === fullKey && hierEditorEditValue !== null;
-                    const val = usingStableEditVal ? String(hierEditorEditValue) : getSlotParam(hierEditorSlot, fullKey);
+                    const val = usingStableEditVal ? String(hierEditorEditValue) : getHierarchyDisplayRawValue(hierEditorSlot, fullKey);
                     displayVal = val !== null ? formatHierDisplayValue(key, val) : "";
+                    if (isHierarchyParamModulated(hierEditorSlot, fullKey)) {
+                        displayLabel = `${label}~`;
+                    }
                 }
-                return { label, value: displayVal, key };
+                return { label: displayLabel, value: displayVal, key };
             });
 
             drawMenuList({
@@ -8024,9 +8104,10 @@ function handleJog(delta) {
                     const fullKey = buildHierarchyParamKey(key);
                     const freshVal = (hierEditorEditKey === fullKey && hierEditorEditValue !== null)
                         ? String(hierEditorEditValue)
-                        : getSlotParam(hierEditorSlot, fullKey);
+                        : getHierarchyDisplayRawValue(hierEditorSlot, fullKey);
                     const displayVal = freshVal !== null ? formatHierDisplayValue(key, freshVal) : "";
-                    announceParameter(param.label || key, displayVal);
+                    const modSuffix = isHierarchyParamModulated(hierEditorSlot, fullKey) ? "~" : "";
+                    announceParameter((param.label || key) + modSuffix, displayVal);
                 }
             } else {
                 /* Scroll param list (includes preset edit mode) */
@@ -8034,7 +8115,16 @@ function handleJog(delta) {
                 /* Announce selected parameter */
                 if (hierEditorParams.length > 0 && hierEditorSelectedIdx >= 0 && hierEditorSelectedIdx < hierEditorParams.length) {
                     const param = hierEditorParams[hierEditorSelectedIdx];
-                    announceMenuItem(param.label || param.key, param.value || "");
+                    const key = typeof param === "string" ? param : param.key || param;
+                    if (typeof key !== "string" || key.startsWith("nav_") || key.startsWith("item_") || key === SWAP_MODULE_ACTION) {
+                        announceMenuItem(param.label || param.key, param.value || "");
+                    } else {
+                        const fullKey = buildHierarchyParamKey(key);
+                        const val = getHierarchyDisplayRawValue(hierEditorSlot, fullKey);
+                        const displayVal = val !== null ? formatHierDisplayValue(key, val) : "";
+                        const modSuffix = isHierarchyParamModulated(hierEditorSlot, fullKey) ? "~" : "";
+                        announceMenuItem((param.label || key) + modSuffix, displayVal);
+                    }
                 }
             }
             break;
@@ -10634,7 +10724,7 @@ function makeMfxLfoCtx(lfoIdx) {
             return result;
         },
         title: "MFX LFO " + (lfoIdx + 1),
-        returnView: VIEWS.MASTER_FX_SETTINGS,
+        returnView: VIEWS.MASTER_FX,
         returnAnnounce: "Master FX Settings",
     };
 }
@@ -10649,6 +10739,7 @@ function getLfoItems() {
         { key: "target", label: "Target", type: "action" },
         { key: "enabled", label: "Enabled", type: "enum", options: ["Off", "On"] },
         { key: "shape", label: "Shape", type: "enum", options: LFO_SHAPES },
+        { key: "polarity", label: "Mode", type: "enum", options: ["Unipolar", "Bipolar"] },
         { key: "sync", label: "Sync", type: "enum", options: ["Free", "Sync"] },
     ];
 
@@ -10658,7 +10749,7 @@ function getLfoItems() {
         items.push({ key: "rate_hz", label: "Rate", type: "float", min: 0.1, max: 20.0, step: 0.1, unit: "Hz" });
     }
 
-    items.push({ key: "depth", label: "Depth", type: "float", min: 0, max: 1, step: 0.01, unit: "%" });
+    items.push({ key: "depth", label: "Depth", type: "float", min: -1, max: 1, step: 0.01, unit: "%" });
     items.push({ key: "phase_offset", label: "Phase", type: "float", min: 0, max: 1, step: 0.0417, unit: "deg" });
     if (lfoCtx && lfoCtx.supportsRetrigger) {
         items.push({ key: "retrigger", label: "Retrigger", type: "enum", options: ["Off", "On"] });
@@ -10677,6 +10768,7 @@ function getLfoDisplayValue(item) {
         const idx = parseInt(raw);
         return (idx >= 0 && idx < LFO_SHAPES.length) ? LFO_SHAPES[idx] : raw;
     }
+    if (item.key === "polarity") return raw === "1" ? "Bipolar" : "Unipolar";
     if (item.key === "sync") return raw === "1" ? "Sync" : "Free";
     if (item.key === "rate_div") {
         const idx = parseInt(raw);
@@ -10870,6 +10962,7 @@ globalThis.init = function() {
             }
         }
     }
+    loadMasterFxLfoStateFromFile(activeSlotStateDir, false);
 
     /* Sync dirty cache and slot names from autosave files (shim loaded them on startup) */
     for (let i = 0; i < SHADOW_UI_SLOTS; i++) {
@@ -11045,6 +11138,8 @@ globalThis.tick = function() {
                             const mfx = host_read_file(srcDir + "/master_fx_" + i + ".json");
                             if (mfx) host_write_file(newDir + "/master_fx_" + i + ".json", mfx);
                         }
+                        const mfxLfos = host_read_file(srcDir + "/" + MASTER_FX_LFO_STATE_FILE);
+                        if (mfxLfos) host_write_file(newDir + "/" + MASTER_FX_LFO_STATE_FILE, mfxLfos);
                     }
                 } else {
                     /* New set created after migration — start with empty slots */
@@ -11053,6 +11148,7 @@ globalThis.tick = function() {
                         host_write_file(newDir + "/slot_" + i + ".json", "{}\n");
                         host_write_file(newDir + "/master_fx_" + i + ".json", "{}\n");
                     }
+                    host_write_file(newDir + "/" + MASTER_FX_LFO_STATE_FILE, "{}\n");
                 }
             }
 
@@ -11144,6 +11240,7 @@ globalThis.tick = function() {
                 }
                 debugLog("SET_CHANGED: MFX " + mfxi + " -> " + (mfxModuleId || "(none)"));
             }
+            loadMasterFxLfoStateFromFile(activeSlotStateDir, true);
 
             /* 8. Refresh slot names from new autosave files */
             for (let i = 0; i < SHADOW_UI_SLOTS; i++) {

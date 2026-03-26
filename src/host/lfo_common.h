@@ -31,7 +31,8 @@ typedef struct {
     float rate_hz;        /* Free-running rate (0.1-20.0 Hz) */
     int rate_div;         /* Tempo-synced division index */
     int sync;             /* 0=free, 1=tempo-sync */
-    float depth;          /* 0.0-1.0 */
+    float depth;          /* -1.0..1.0 */
+    int bipolar;          /* 0=unipolar (default), 1=bipolar */
     float phase_offset;   /* 0.0-1.0 (displayed as 0-360 degrees) */
     char target[16];      /* Component key (e.g. "synth", "fx1", "fx2") */
     char param[32];       /* Parameter key within target */
