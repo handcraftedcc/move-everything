@@ -187,6 +187,24 @@ import {
     drawChainSettings as _drawChainSettings,
     drawGlobalSettings as _drawGlobalSettings
 } from './shadow_ui_settings.mjs';
+import {
+    setInputModuleStateDir,
+    loadInputModuleState,
+    saveInputModuleState,
+    copyInputModuleState,
+    ensureInputModuleState,
+    getInputSlotParam,
+    setInputSlotParam,
+    getInputModuleChainParams,
+    getInputModuleHierarchy,
+    getInputModuleName,
+    getInputModuleAbbrev,
+    enterInputModuleSelect,
+    drawInputModuleSelect,
+    handleInputModuleSelectJog,
+    handleInputModuleSelectSelect,
+    handleInputModuleSelectBack
+} from './shadow_ui_input_modules.mjs';
 
 /* Track buttons - derive from imported constants */
 const TRACK_CC_START = MoveRow4;  // CC 40
@@ -202,6 +220,7 @@ const SHADOW_UI_FLAG_JUMP_TO_SCREENREADER = 0x10;
 const SHADOW_UI_FLAG_SET_CHANGED = 0x20;
 const SHADOW_UI_FLAG_JUMP_TO_SETTINGS = 0x40;
 const SHADOW_UI_FLAG_JUMP_TO_TOOLS = 0x80;
+const SHADOW_UI_FLAG_JUMP_TO_INPUT_MODULES = 0x100;
 
 /* Knob CC range for parameter control */
 const KNOB_CC_START = MoveKnob1;  // CC 71
@@ -296,6 +315,7 @@ const VIEWS = {
     PATCH_DETAIL: "detail",   // Show synth/fx info for selected patch
     COMPONENT_PARAMS: "params", // Edit component params (Phase 3)
     COMPONENT_SELECT: "compselect", // Select module for a component
+    INPUT_MODULE_SELECT: "inputmodselect", // Select pre-native input module
     COMPONENT_EDIT: "compedit",  // Edit component (presets, params) via Shift+Click
     MASTER_FX: "masterfx",    // Master FX selection
     HIERARCHY_EDITOR: "hierarch", // Hierarchy-based parameter editor
@@ -2230,6 +2250,7 @@ function getModuleUiPath(moduleId) {
 
 /* Convert component key to DSP param prefix (midiFx -> midi_fx1) */
 function getComponentParamPrefix(componentKey) {
+    if (componentKey === "input") return "input";
     return componentKey === "midiFx" ? "midi_fx1" : componentKey;
 }
 
@@ -2254,6 +2275,11 @@ function setupModuleParamShims(slot, componentKey) {
     };
 
     globalThis.host_swap_module = function() {
+        if (componentKey === "input") {
+            unloadModuleUi();
+            enterInputModuleSelect(slot);
+            return;
+        }
         const compIndex = CHAIN_COMPONENTS.findIndex(c => c.key === componentKey);
         if (compIndex >= 0) {
             unloadModuleUi();
@@ -2554,6 +2580,9 @@ function getModuleAbbrev(moduleId) {
 
 /* Param API helper functions */
 function getSlotParam(slot, key) {
+    if (typeof key === "string" && key.indexOf("input:") === 0) {
+        return getInputSlotParam(slot, key);
+    }
     if (typeof shadow_get_param !== "function") return null;
     try {
         return shadow_get_param(slot, key);
@@ -2581,6 +2610,9 @@ function shadowSetParamBlocking(slot, key, value) {
 }
 
 function setSlotParam(slot, key, value) {
+    if (typeof key === "string" && key.indexOf("input:") === 0) {
+        return setInputSlotParam(slot, key, value);
+    }
     if (typeof shadow_set_param !== "function") return false;
     try {
         const ok = shadow_set_param(slot, key, String(value));
@@ -3538,6 +3570,9 @@ function drawOvertakeMenu() {
 
 /* Fetch chain_params metadata from a component */
 function getComponentChainParams(slot, componentKey) {
+    if (componentKey === "input") {
+        return getInputModuleChainParams(slot);
+    }
     /* Chain params are typically in module.json, but we query via get_param */
     const key = componentKey === "synth" ? "synth:chain_params" :
                 componentKey === "fx1" ? "fx1:chain_params" :
@@ -3577,6 +3612,9 @@ function buildSynthHierarchyFromChainParams(chainParams) {
 
 /* Fetch ui_hierarchy from a component */
 function getComponentHierarchy(slot, componentKey) {
+    if (componentKey === "input") {
+        return getInputModuleHierarchy(slot);
+    }
     const key = componentKey === "synth" ? "synth:ui_hierarchy" :
                 componentKey === "fx1" ? "fx1:ui_hierarchy" :
                 componentKey === "fx2" ? "fx2:ui_hierarchy" :
@@ -7380,6 +7418,10 @@ function enterComponentEditFallback(slotIndex, componentKey) {
 
 /* Enter hierarchy-based parameter editor for a component. Fetches the
  * component's real ui_hierarchy; falls back to the preset browser if absent. */
+function enterInputModuleHierarchy(slotIndex) {
+    enterHierarchyEditor(slotIndex, "input");
+}
+
 function enterHierarchyEditor(slotIndex, componentKey) {
     const hierarchy = getComponentHierarchy(slotIndex, componentKey);
     if (!hierarchy) {
@@ -7448,8 +7490,10 @@ function enterHierarchyEditorWith(slotIndex, componentKey, hierarchy) {
     needsRedraw = true;
 
     /* Announce menu title + initial selection */
-    const prefix = componentKey === "midiFx" ? "midi_fx1" : componentKey;
-    const moduleName = getSlotParam(slotIndex, `${prefix}:name`) || componentKey;
+    const prefix = getComponentParamPrefix(componentKey);
+    const moduleName = componentKey === "input"
+        ? getInputModuleName(slotIndex)
+        : (getSlotParam(slotIndex, `${prefix}:name`) || componentKey);
 
     if (hierEditorIsPresetLevel && hierEditorPresetCount > 0) {
         /* Preset browser level - announce preset name first, then position */
@@ -7706,8 +7750,9 @@ function exitHierarchyEditor() {
     clearModuleParamShims();
     clearWavZoomStates();
 
-    /* Determine return view based on whether we're editing Master FX */
+    /* Determine return view based on whether we're editing Master FX or input modules */
     const returnToMasterFx = hierEditorIsMasterFx;
+    const returnToInputModuleSelect = hierEditorComponent === "input";
 
     hierEditorSlot = -1;
     hierEditorComponent = "";
@@ -7727,7 +7772,8 @@ function exitHierarchyEditor() {
     filepathBrowserParamKey = "";
     resetDynamicParamPickerState();
 
-    view = returnToMasterFx ? VIEWS.MASTER_FX : VIEWS.CHAIN_EDIT;
+    view = returnToInputModuleSelect ? VIEWS.INPUT_MODULE_SELECT :
+           (returnToMasterFx ? VIEWS.MASTER_FX : VIEWS.CHAIN_EDIT);
     needsRedraw = true;
 }
 
@@ -7989,6 +8035,22 @@ function shouldRefreshDynamicRateMeta(key) {
     return typeof key === "string" && /_rate_mode$/.test(key);
 }
 
+function toggleHierarchyBoolParam(key, fullKey) {
+    const currentVal = getSlotParam(hierEditorSlot, fullKey);
+    if (currentVal === null) return false;
+    const boolVal = parseMetaBool(currentVal);
+    const nextVal = boolVal ? "0" : "1";
+    setSlotParam(hierEditorSlot, fullKey, nextVal);
+    if (hierEditorEditMode && hierEditorEditKey === fullKey) {
+        hierEditorEditValue = nextVal;
+    }
+    refreshHierarchyVisibility();
+    const meta = getParamMetadata(key);
+    announceParameter((meta && meta.name) || key, boolVal ? "Off" : "On");
+    needsRedraw = true;
+    return true;
+}
+
 /* Adjust selected param value via jog */
 function adjustHierSelectedParam(delta) {
     if (hierEditorSelectedIdx >= hierEditorParams.length) return;
@@ -8013,6 +8075,12 @@ function adjustHierSelectedParam(delta) {
     debugLog(`adjustHierSelectedParam: key=${key}, currentVal=${currentVal}, meta=${JSON.stringify(meta)}, chainParams=${JSON.stringify(hierEditorChainParams)}`);
 
     if (meta && (meta.type === "string" || meta.type === "canvas")) {
+        return;
+    }
+
+    /* Handle bool type - toggle on jog while editing. */
+    if (meta && meta.type === "bool") {
+        toggleHierarchyBoolParam(key, fullKey);
         return;
     }
 
@@ -8746,6 +8814,10 @@ function formatHierDisplayValue(key, val) {
             return meta.none_label || "(none)";
         }
         return formatMetaOptionValue(meta, val);
+    }
+
+    if (meta && meta.type === "bool") {
+        return parseMetaBool(val) ? "On" : "Off";
     }
 
     if (meta && meta.type === "filepath") {
@@ -9971,20 +10043,27 @@ function drawHierarchyEditor() {
 
     /* Get plugin info */
     const prefix = getComponentParamPrefix(hierEditorComponent);
-    const cfg = chainConfigs[hierEditorSlot] || createEmptyChainConfig();
+    const isInputHierarchy = hierEditorComponent === "input";
+    const cfg = isInputHierarchy ? null : (chainConfigs[hierEditorSlot] || createEmptyChainConfig());
     const moduleData = cfg && cfg[hierEditorComponent];
-    const abbrev = moduleData ? getModuleAbbrev(moduleData.module) : hierEditorComponent.toUpperCase();
+    const abbrev = isInputHierarchy
+        ? getInputModuleAbbrev(hierEditorSlot)
+        : (moduleData ? getModuleAbbrev(moduleData.module) : hierEditorComponent.toUpperCase());
 
     /* Get bank or preset name for header depending on view */
     let headerName;
     if (hierEditorIsPresetLevel && !hierEditorPresetEditMode) {
         /* Preset browser: show bank/soundfont name */
-        headerName = getSlotParam(hierEditorSlot, `${prefix}:bank_name`) ||
-                     getSlotParam(hierEditorSlot, `${prefix}:name`) || "";
+        headerName = isInputHierarchy
+            ? getInputModuleName(hierEditorSlot)
+            : (getSlotParam(hierEditorSlot, `${prefix}:bank_name`) ||
+               getSlotParam(hierEditorSlot, `${prefix}:name`) || "");
     } else {
         /* Edit mode: show preset name */
-        headerName = getSlotParam(hierEditorSlot, `${prefix}:preset_name`) ||
-                     getSlotParam(hierEditorSlot, `${prefix}:name`) || "";
+        headerName = isInputHierarchy
+            ? getInputModuleName(hierEditorSlot)
+            : (getSlotParam(hierEditorSlot, `${prefix}:preset_name`) ||
+               getSlotParam(hierEditorSlot, `${prefix}:name`) || "");
     }
 
     /* Check for mode indicator - show * for performance mode */
@@ -9999,16 +10078,16 @@ function drawHierarchyEditor() {
     }
 
     /* Build header: S#: Module: Bank (preset browser) or Preset (edit view) */
-    const dirtyMark = slotDirtyCache[hierEditorSlot] ? "*" : "";
+    const dirtyMark = (!isInputHierarchy && slotDirtyCache[hierEditorSlot]) ? "*" : "";
     let headerText;
     if (hierEditorIsPresetLevel && !hierEditorPresetEditMode) {
         /* In preset browser, always show bank name */
-        headerText = `S${hierEditorSlot + 1}${dirtyMark}: ${abbrev}: ${headerName}${modeIndicator}`;
+        headerText = `${isInputHierarchy ? "T" : "S"}${hierEditorSlot + 1}${dirtyMark}: ${abbrev}: ${headerName}${modeIndicator}`;
     } else if (hierEditorPath.length > 0) {
         /* If navigated into sub-levels, append path */
-        headerText = `S${hierEditorSlot + 1}${dirtyMark}: ${abbrev} > ${hierEditorPath[hierEditorPath.length - 1]}`;
+        headerText = `${isInputHierarchy ? "T" : "S"}${hierEditorSlot + 1}${dirtyMark}: ${abbrev} > ${hierEditorPath[hierEditorPath.length - 1]}`;
     } else {
-        headerText = `S${hierEditorSlot + 1}${dirtyMark}: ${abbrev}: ${headerName}${modeIndicator}`;
+        headerText = `${isInputHierarchy ? "T" : "S"}${hierEditorSlot + 1}${dirtyMark}: ${abbrev}: ${headerName}${modeIndicator}`;
     }
 
     drawHeader(truncateText(headerText, 24));
@@ -10119,7 +10198,7 @@ function drawHierarchyEditor() {
                 if (param && typeof param === "object" && param.level) {
                     return {
                         label: `[${param.label || param.level}...]`,
-                        value: "",
+                        value: ">",
                         key: `nav_${param.level}`,
                         isNavigation: true,
                         targetLevel: param.level
@@ -10141,7 +10220,8 @@ function drawHierarchyEditor() {
 
                 /* Handle special swap module action */
                 if (key === SWAP_MODULE_ACTION) {
-                    return { label: "[Swap module...]", value: "", key, isAction: true };
+                    const label = hierEditorComponent === "input" ? "[Swap Input Module...]" : "[Swap module...]";
+                    return { label, value: ">", key, isAction: true };
                 }
 
                 const meta = getParamMetadata(key);
@@ -10686,6 +10766,9 @@ function handleJog(delta) {
                 announceMenuItem("Module", mod.name || mod.id || "Unknown");
             }
             break;
+        case VIEWS.INPUT_MODULE_SELECT:
+            handleInputModuleSelectJog(delta);
+            break;
         case VIEWS.CHAIN_SETTINGS:
             if (showingNamePreview) {
                 namePreviewIndex = namePreviewIndex === 0 ? 1 : 0;
@@ -11180,6 +11263,9 @@ function handleSelect() {
             }
             applyComponentSelection();
             break;
+        case VIEWS.INPUT_MODULE_SELECT:
+            handleInputModuleSelectSelect();
+            break;
         case VIEWS.STORE_PICKER_RESULT:
             handleStorePickerResultSelect();
             break;
@@ -11335,11 +11421,16 @@ function handleSelect() {
                 const selectedMode = hierEditorParams[hierEditorSelectedIdx];
                 /* Check for swap module action first */
                 if (selectedMode === SWAP_MODULE_ACTION) {
-                    const compIndex = CHAIN_COMPONENTS.findIndex(c => c.key === hierEditorComponent);
                     const slotToSwap = hierEditorSlot;
-                    if (compIndex >= 0) {
+                    if (hierEditorComponent === "input") {
                         exitHierarchyEditor();
-                        enterComponentSelect(slotToSwap, compIndex);
+                        enterInputModuleSelect(slotToSwap);
+                    } else {
+                        const compIndex = CHAIN_COMPONENTS.findIndex(c => c.key === hierEditorComponent);
+                        if (compIndex >= 0) {
+                            exitHierarchyEditor();
+                            enterComponentSelect(slotToSwap, compIndex);
+                        }
                     }
                 } else if (selectedMode && hierEditorHierarchy.levels[selectedMode]) {
                     /* If hierarchy specifies mode_param, set it to the mode index */
@@ -11468,8 +11559,12 @@ function handleSelect() {
                     break;
                 }
                 if (selectedParam === SWAP_MODULE_ACTION) {
-                    /* Swap module - handle Master FX vs regular chain slots */
-                    if (hierEditorIsMasterFx) {
+                    /* Swap module - handle Input, Master FX, or regular chain slots */
+                    if (hierEditorComponent === "input") {
+                        const slotToSwap = hierEditorSlot;
+                        exitHierarchyEditor();
+                        enterInputModuleSelect(slotToSwap);
+                    } else if (hierEditorIsMasterFx) {
                         /* Master FX: use Master FX module select */
                         const fxSlot = hierEditorMasterFxSlot;
                         exitHierarchyEditor();
@@ -11494,10 +11589,10 @@ function handleSelect() {
                         break;
                     }
                     const meta = getParamMetadata(selectedKey);
+                    const fullKey = buildHierarchyParamKey(selectedKey);
                     if (!hierEditorEditMode && meta && meta.picker_type) {
                         openDynamicParamPicker(selectedKey, meta);
                     } else if (!hierEditorEditMode && meta && meta.type === "string") {
-                        const fullKey = buildHierarchyParamKey(selectedKey);
                         const currentText = getSlotParam(hierEditorSlot, fullKey) || "";
                         openTextEntry({
                             title: meta.name || selectedKey,
@@ -11940,6 +12035,9 @@ function handleBack() {
             announce("Chain Editor");
             needsRedraw = true;
             break;
+        case VIEWS.INPUT_MODULE_SELECT:
+            handleInputModuleSelectBack();
+            break;
         case VIEWS.STORE_PICKER_RESULT:
             handleStorePickerBack();
             break;
@@ -12071,8 +12169,9 @@ function handleBack() {
             } else {
                 /* At root level - exit hierarchy editor */
                 const wasMasterFx = hierEditorIsMasterFx;
+                const wasInputModule = hierEditorComponent === "input";
                 exitHierarchyEditor();
-                announce(wasMasterFx ? "Master FX" : "Chain Editor");
+                announce(wasInputModule ? "Input Module" : (wasMasterFx ? "Master FX" : "Chain Editor"));
             }
             break;
         }
@@ -12944,6 +13043,7 @@ function drawHelpDetail() {
     _ctx.getMasterFxSlotModule = (...args) => getMasterFxSlotModule(...args);
     _ctx.getMasterFxParam = (...args) => getMasterFxParam(...args);
     _ctx.getModuleAbbrev = (...args) => getModuleAbbrev(...args);
+    _ctx.enterInputModuleHierarchy = (...args) => enterInputModuleHierarchy(...args);
     _ctx.isTextEntryActive = () => isTextEntryActive();
     _ctx.drawTextEntry = () => drawTextEntry();
     _ctx.drawHelpDetail = () => drawHelpDetail();
@@ -13549,6 +13649,7 @@ globalThis.init = function() {
             }
         }
     }
+    loadInputModuleState(activeSlotStateDir);
     /* Re-apply Master FX sync after activeSlotStateDir resolves to the active set. */
     loadMasterFxChainFromConfig();
 
@@ -13916,6 +14017,17 @@ globalThis.tick = function() {
                 if (typeof shadow_clear_ui_flags === "function") {
                     shadow_clear_ui_flags(SHADOW_UI_FLAG_JUMP_TO_TOOLS | SHADOW_UI_FLAG_JUMP_TO_SLOT);
                 }
+            } else if (flags & SHADOW_UI_FLAG_JUMP_TO_INPUT_MODULES) {
+                debugLog("INPUT_MODULES flag detected, entering Input Module menu");
+                let jumpSlot = selectedSlot;
+                if (typeof shadow_get_ui_slot === "function") {
+                    const uiSlot = shadow_get_ui_slot();
+                    if (uiSlot >= 0 && uiSlot < SHADOW_UI_SLOTS) jumpSlot = uiSlot;
+                }
+                enterInputModuleSelect(jumpSlot);
+                if (typeof shadow_clear_ui_flags === "function") {
+                    shadow_clear_ui_flags(SHADOW_UI_FLAG_JUMP_TO_INPUT_MODULES | SHADOW_UI_FLAG_JUMP_TO_SLOT);
+                }
             } else if (flags & SHADOW_UI_FLAG_JUMP_TO_SETTINGS) {
                 debugLog("SETTINGS flag detected, entering Global Settings");
                 enterGlobalSettings();
@@ -13982,6 +14094,7 @@ globalThis.tick = function() {
             autosaveAllSlots();
             saveMasterFxChainConfig();
             saveChainConfigToDir(activeSlotStateDir);
+            saveInputModuleState();
             if (typeof shadow_clear_ui_flags === "function") {
                 shadow_clear_ui_flags(SHADOW_UI_FLAG_SAVE_STATE);
             }
@@ -13994,6 +14107,7 @@ globalThis.tick = function() {
             saveMasterFxChainConfig();
             /* Save chain config (volumes, channels, mute/solo) to outgoing set dir */
             saveChainConfigToDir(activeSlotStateDir);
+            saveInputModuleState();
             /* Save current RNBO graph (if RNBO is running) */
             saveRnboGraphToDir(activeSlotStateDir);
 
@@ -14047,6 +14161,7 @@ globalThis.tick = function() {
                     /* Also copy chain config */
                     const chainCfg = host_read_file(copySourceDir + "/shadow_chain_config.json");
                     if (chainCfg) host_write_file(newDir + "/shadow_chain_config.json", chainCfg);
+                    copyInputModuleState(copySourceDir, newDir);
                 } else {
                     /* New set — start with empty slots */
                     debugLog("SET_CHANGED: new set, starting with empty slots");
@@ -14072,6 +14187,7 @@ globalThis.tick = function() {
                     }
                     host_write_file(newDir + "/shadow_chain_config.json",
                         JSON.stringify(defaultCfg, null, 2) + "\n");
+                    ensureInputModuleState(newDir);
                 }
             }
 
@@ -14080,6 +14196,7 @@ globalThis.tick = function() {
             activeSlotStateDir = newDir;
             debugLog("SET_CHANGED: " + oldDir + " -> " + newDir);
             loadChainConfigFromDir(newDir);
+            setInputModuleStateDir(newDir);
 
             /* 6. Two-pass reload: clear ALL old slots first (freeing memory),
              *    then load new slots. This reduces peak memory when switching
@@ -14533,6 +14650,9 @@ globalThis.tick = function() {
             break;
         case VIEWS.COMPONENT_SELECT:
             drawComponentSelect();
+            break;
+        case VIEWS.INPUT_MODULE_SELECT:
+            drawInputModuleSelect();
             break;
         case VIEWS.CHAIN_SETTINGS:
             drawChainSettings();

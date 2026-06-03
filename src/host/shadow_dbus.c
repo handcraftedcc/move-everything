@@ -212,6 +212,9 @@ static void shadow_dbus_handle_text(const char *text)
 
     /* Track native Move sampler source from stock announcements. */
     host.native_sampler_update(text);
+    if (host.input_key_scale_update_from_text) {
+        host.input_key_scale_update_from_text(text);
+    }
 
     /* Set page: detect Set Overview screen for Shift+Vol+Left/Right interception */
     if (strcasecmp(text, "Set Overview") == 0 || strcasecmp(text, "Sets") == 0) {

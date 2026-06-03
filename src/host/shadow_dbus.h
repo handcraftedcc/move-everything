@@ -29,6 +29,7 @@ typedef struct {
     void (*apply_mute)(int slot, int is_muted);
     void (*ui_state_update_slot)(int slot);
     void (*native_sampler_update)(const char *text);
+    void (*input_key_scale_update_from_text)(const char *text);
     /* Shared state pointers */
     shadow_chain_slot_t *chain_slots;
     shadow_control_t **shadow_control_ptr;

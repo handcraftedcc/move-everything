@@ -193,7 +193,7 @@ static JSValue js_shadow_clear_ui_flags(JSContext *ctx, JSValueConst this_val, i
     if (!shadow_control || argc < 1) return JS_UNDEFINED;
     int mask = 0;
     if (JS_ToInt32(ctx, &mask, argv[0])) return JS_UNDEFINED;
-    shadow_control->ui_flags &= ~(uint8_t)mask;
+    shadow_control->ui_flags &= (uint16_t)~((uint16_t)mask);
     return JS_UNDEFINED;
 }
 
@@ -1185,7 +1185,7 @@ static JSValue js_host_list_modules(JSContext *ctx, JSValueConst this_val,
     int idx = 0;
 
     /* Subdirectories to scan */
-    const char *subdirs[] = { "", "sound_generators", "audio_fx", "midi_fx", "utilities", "overtake", "tools", "other", NULL };
+    const char *subdirs[] = { "", "sound_generators", "audio_fx", "midi_fx", "inputs", "input_modules", "utilities", "overtake", "tools", "other", NULL };
 
     for (int s = 0; subdirs[s] != NULL; s++) {
         char dir_path[512];
@@ -2028,10 +2028,12 @@ static JSValue js_host_get_module_metadata(JSContext *ctx, JSValueConst this_val
      * for JS-side inspection, so the read path is duplicated here. */
     /* Try each category dir until module.json found. */
     static const char *bases[] = {
+        "/data/UserData/schwung/modules/inputs",
         "/data/UserData/schwung/modules",
         "/data/UserData/schwung/modules/sound_generators",
         "/data/UserData/schwung/modules/audio_fx",
         "/data/UserData/schwung/modules/midi_fx",
+        "/data/UserData/schwung/modules/input_modules",
         "/data/UserData/schwung/modules/tools",
     };
     char path[512];

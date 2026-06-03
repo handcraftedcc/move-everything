@@ -1,0 +1,12 @@
+{
+  "id": "native",
+  "name": "Native",
+  "version": "1.0.0",
+  "api_version": 2,
+  "component_type": "input_module",
+  "abbrev": "NAT",
+  "description": "Use Move's native input unchanged.",
+  "input": {
+    "led_mode": "native"
+  }
+}

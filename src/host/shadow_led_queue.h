@@ -64,6 +64,14 @@ void shadow_flush_pending_input_leds(void);
  * Returns -1 if unknown, else the velocity/color value. */
 int led_queue_get_note_led_color(int note);
 
+/* Scoped pad-only ownership for input modules. Uses the same pending LED queue
+ * and restore flush as overtake, but snapshots/restores only pad notes 68-99. */
+void led_queue_set_input_pad_owner(int active);
+int led_queue_input_pad_owner_active(void);
+int led_queue_set_input_pad_led(int pad_index, uint8_t color);
+int led_queue_get_input_pad_led(int pad_index);
+int led_queue_get_track_color(int track_index);
+
 /* JACK LED cache — track LED state from JACK MIDI output (note/CC) */
 void led_queue_cache_jack_led(uint8_t cin, uint8_t status, uint8_t data1, uint8_t data2);
 void led_queue_clear_jack_cache(void);

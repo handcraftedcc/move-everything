@@ -209,6 +209,21 @@ host_exit_module()            // Exit current tool module, return to tools menu 
 // docs/ADDRESSING_MOVE_SYNTHS.md for the cable-2 routing flow.
 move_midi_inject_to_move([packet0, status, d1, d2])
 
+// Input modules (native C, not JavaScript UI modules) use
+// src/host/input_module_api_v1.h. They receive physical cable-0 pad packets
+// and may return handled=true with replacement cable-2 MIDI packets. Input
+// context includes active track, current track uiOctaveIndex, and parsed
+// set root/scale when known. Root/scale is loaded from Song.abl, then live
+// menu browsing changes are applied from native screen-reader D-Bus text
+// (`of 12` roots, `of 35` scales). Schwung also polls Song.abl mtime every few
+// seconds and reads only its top-level header before the tracks array as a
+// slower set-file authority/fallback; Sentry breadcrumbs are not used for live
+// input-module key/scale updates. Host callbacks expose pad-only LED ownership
+// helpers:
+// set_pad_led, get_pad_led, and get_track_color. get_track_color is sourced
+// from Song.abl top-level tracks[].color. The host owns the LED snapshot/
+// restore flow; modules only request pad colors.
+
 // Cable-2 (external USB) MIDI channel remap — overtake modules only.
 // Rewrites the channel byte of incoming external MIDI before Move's firmware
 // processes it. Solves live-external-MIDI ↔ Move-track routing without the

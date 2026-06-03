@@ -119,6 +119,10 @@ static int prev_overtake_mode = 0;
 /* ============================================================================
  * Hardware LED indices — only target LEDs that physically exist on Move.
  * ============================================================================ */
+#define MOVE_PAD_NOTE_FIRST 68
+#define MOVE_PAD_NOTE_LAST 99
+#define MOVE_PAD_NOTE_COUNT (MOVE_PAD_NOTE_LAST - MOVE_PAD_NOTE_FIRST + 1)
+
 static const int hw_note_leds[] = {
     /* Steps 1-16 */
     16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31,
@@ -149,6 +153,18 @@ static uint8_t shadow_input_pending_note_status[128];
 static uint8_t shadow_input_pending_note_cin[128];
 static int shadow_input_queue_initialized = 0;
 
+/* Input module pad LED ownership. This is intentionally narrower than
+ * overtake: only pad notes 68-99 are owned, and the existing pending queue is
+ * still responsible for rate-limited hardware writes and restore passes. */
+static int input_pad_owner_active = 0;
+static int input_pad_snapshot_valid = 0;
+static int input_pad_restore_pending = 0;
+static int input_pad_pass_count = 0;
+static int input_pad_snapshot_color[MOVE_PAD_NOTE_COUNT];
+static uint8_t input_pad_snapshot_cin[MOVE_PAD_NOTE_COUNT];
+static uint8_t input_pad_snapshot_status[MOVE_PAD_NOTE_COUNT];
+static int input_pad_led_color[MOVE_PAD_NOTE_COUNT];
+
 /* ============================================================================
  * Init
  * ============================================================================ */
@@ -163,6 +179,10 @@ void led_queue_init(const led_queue_host_t *h) {
     move_led_clear_pending = 0;
     move_led_pass_count = 0;
     prev_overtake_mode = 0;
+    input_pad_owner_active = 0;
+    input_pad_snapshot_valid = 0;
+    input_pad_restore_pending = 0;
+    input_pad_pass_count = 0;
     for (int i = 0; i < 128; i++) {
         move_note_led_state[i] = -1;
         move_cc_led_state[i] = -1;
@@ -172,6 +192,10 @@ void led_queue_init(const led_queue_host_t *h) {
     for (int i = 0; i < 128; i++) {
         jack_note_led_state[i] = -1;
         jack_cc_led_state[i] = -1;
+    }
+    for (int i = 0; i < MOVE_PAD_NOTE_COUNT; i++) {
+        input_pad_snapshot_color[i] = -1;
+        input_pad_led_color[i] = -1;
     }
     led_queue_module_initialized = 1;
 }
@@ -266,6 +290,77 @@ static void queue_hw_leds_restore(void) {
             shadow_pending_cc_cin[i] = 0x0B;
         }
     }
+}
+
+static void queue_input_pad_leds_restore(void) {
+    shadow_init_led_queue();
+    for (int idx = 0; idx < MOVE_PAD_NOTE_COUNT; idx++) {
+        int note = MOVE_PAD_NOTE_FIRST + idx;
+        if (input_pad_snapshot_valid && input_pad_snapshot_color[idx] >= 0) {
+            shadow_pending_note_color[note] = input_pad_snapshot_color[idx];
+            shadow_pending_note_status[note] = input_pad_snapshot_status[idx];
+            shadow_pending_note_cin[note] = input_pad_snapshot_cin[idx];
+        } else {
+            shadow_pending_note_color[note] = 0;
+            shadow_pending_note_status[note] = 0x90;
+            shadow_pending_note_cin[note] = 0x09;
+        }
+    }
+}
+
+void led_queue_set_input_pad_owner(int active) {
+    active = active ? 1 : 0;
+    if (active == input_pad_owner_active) return;
+
+    if (active) {
+        for (int idx = 0; idx < MOVE_PAD_NOTE_COUNT; idx++) {
+            int note = MOVE_PAD_NOTE_FIRST + idx;
+            input_pad_snapshot_color[idx] = move_note_led_state[note];
+            input_pad_snapshot_status[idx] = move_note_led_status[note];
+            input_pad_snapshot_cin[idx] = move_note_led_cin[note];
+            input_pad_led_color[idx] = -1;
+        }
+        input_pad_snapshot_valid = 1;
+        input_pad_restore_pending = 0;
+        input_pad_pass_count = 0;
+    } else {
+        if (input_pad_snapshot_valid) {
+            queue_input_pad_leds_restore();
+            input_pad_restore_pending = 1;
+            input_pad_pass_count = 1;
+        }
+        for (int idx = 0; idx < MOVE_PAD_NOTE_COUNT; idx++) {
+            input_pad_led_color[idx] = -1;
+        }
+    }
+
+    input_pad_owner_active = active;
+}
+
+int led_queue_input_pad_owner_active(void) {
+    return input_pad_owner_active;
+}
+
+int led_queue_set_input_pad_led(int pad_index, uint8_t color) {
+    if (!input_pad_owner_active) return 0;
+    if (pad_index < 0 || pad_index >= MOVE_PAD_NOTE_COUNT) return 0;
+    int note = MOVE_PAD_NOTE_FIRST + pad_index;
+    input_pad_led_color[pad_index] = color;
+    shadow_queue_led(0x09, 0x90, (uint8_t)note, color);
+    return 1;
+}
+
+int led_queue_get_input_pad_led(int pad_index) {
+    if (pad_index < 0 || pad_index >= MOVE_PAD_NOTE_COUNT) return -1;
+    if (input_pad_led_color[pad_index] >= 0) return input_pad_led_color[pad_index];
+    return led_queue_get_note_led_color(MOVE_PAD_NOTE_FIRST + pad_index);
+}
+
+int led_queue_get_track_color(int track_index) {
+    if (track_index < 0 || track_index >= 4) return -1;
+    int cc = 43 - track_index;
+    if (cc < 0 || cc >= 128) return -1;
+    return move_cc_led_state[cc];
 }
 
 void shadow_clear_move_leds_if_overtake(void) {
@@ -369,6 +464,25 @@ void shadow_clear_move_leds_if_overtake(void) {
      * so the overtake module has full LED control.
      * If skip_led_clear is set, let Move's LEDs pass through (e.g. song-mode
      * wants Move's pad colors to update as clips play). */
+    if (input_pad_owner_active) {
+        for (int i = 0; i < HW_MIDI_OUT_SIZE; i += 4) {
+            uint8_t cable = (midi_out[i] >> 4) & 0x0F;
+            uint8_t type = midi_out[i+1] & 0xF0;
+            uint8_t d1 = midi_out[i+2];
+            if (cable == 0 && type == 0x90 && d1 >= MOVE_PAD_NOTE_FIRST && d1 <= MOVE_PAD_NOTE_LAST) {
+                midi_out[i] = 0;
+                midi_out[i+1] = 0;
+                midi_out[i+2] = 0;
+                midi_out[i+3] = 0;
+            } else if (cable == 0 && type == 0x80 && d1 >= MOVE_PAD_NOTE_FIRST && d1 <= MOVE_PAD_NOTE_LAST) {
+                midi_out[i] = 0;
+                midi_out[i+1] = 0;
+                midi_out[i+2] = 0;
+                midi_out[i+3] = 0;
+            }
+        }
+    }
+
     if (!cur_overtake) return;
 
     /* Move-native co-run: the tool sets skip_led_clear=1 so Move's CC + sysex
@@ -618,9 +732,12 @@ void shadow_flush_pending_leds(void) {
     }
 
     /* When a pass completes, either queue the next pass or clear the flags */
-    if ((move_led_restore_pending || move_led_clear_pending) &&
+    if ((move_led_restore_pending || move_led_clear_pending || input_pad_restore_pending) &&
         !notes_remaining && !ccs_remaining) {
-        if (move_led_pass_count > 0) {
+        if (input_pad_restore_pending && input_pad_pass_count > 0) {
+            input_pad_pass_count--;
+            queue_input_pad_leds_restore();
+        } else if (move_led_pass_count > 0) {
             move_led_pass_count--;
             /* Queue another pass of the same type */
             if (move_led_clear_pending) {
@@ -631,6 +748,7 @@ void shadow_flush_pending_leds(void) {
         } else {
             move_led_restore_pending = 0;
             move_led_clear_pending = 0;
+            input_pad_restore_pending = 0;
         }
     }
 

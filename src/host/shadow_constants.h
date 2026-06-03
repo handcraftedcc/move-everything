@@ -91,6 +91,7 @@
 #define SHADOW_UI_FLAG_SET_CHANGED 0x20           /* Set changed - reload slot state */
 #define SHADOW_UI_FLAG_JUMP_TO_SETTINGS 0x40     /* Jump to Global Settings */
 #define SHADOW_UI_FLAG_JUMP_TO_TOOLS 0x80        /* Jump to Tools menu */
+#define SHADOW_UI_FLAG_JUMP_TO_INPUT_MODULES 0x100 /* Jump to Input Module menu */
 
 /* ============================================================================
  * Special Values
@@ -114,9 +115,9 @@ typedef struct shadow_control_t {
     volatile uint8_t write_idx;       /* MIDI write index */
     volatile uint8_t read_idx;        /* MIDI read index */
     volatile uint8_t ui_slot;         /* UI-highlighted slot for knob routing */
-    volatile uint8_t ui_flags;        /* UI flags (SHADOW_UI_FLAG_*) */
+    volatile uint8_t reserved_ui_flags_align;
+    volatile uint16_t ui_flags;       /* UI flags (SHADOW_UI_FLAG_*) */
     volatile uint16_t ui_patch_index; /* Requested patch index */
-    volatile uint16_t reserved16;
     volatile uint32_t ui_request_id;  /* Incremented on patch request */
     volatile uint32_t shim_counter;   /* Debug: shim tick counter */
     volatile uint8_t selected_slot;   /* Track-selected slot (0-3) for playback/knobs */

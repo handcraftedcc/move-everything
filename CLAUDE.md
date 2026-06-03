@@ -64,6 +64,14 @@ Modules (src/modules/<id>/):
   dsp.so            # Optional native DSP plugin
 ```
 
+Input modules live under `src/modules/inputs/<id>/` and install to
+`modules/inputs/<id>/`. They run in the shim before native note handling,
+may emit replacement cable-2 MIDI, and can opt into pad-only LED replacement
+that reuses the `shadow_led_queue.c` snapshot/restore path for notes 68-99.
+Input context root/scale and track colors are seeded from the active set's
+`Song.abl`; live root/scale hints come from native screen-reader D-Bus menu
+text, with a lightweight Song.abl mtime/header poll as fallback.
+
 Key sources: `src/schwung_host.c` (host runtime), `src/schwung_shim.c` (LD_PRELOAD shim), `src/host/module_manager.c`, `src/host/menu_ui.js`, `src/host/plugin_api_v1.h`.
 
 Built-in modules: `chain`, `file-browser`, `song-mode`, `wav-player`.
@@ -173,7 +181,7 @@ SPI callback runs SCHED_FIFO 90 on core 3. Budget ~900µs/frame after the ~2ms t
   modules/
     chain/                          # Built-in
     sound_generators/<id>/          # External (by component_type)
-    audio_fx/<id>/, midi_fx/<id>/, tools/<id>/
+    audio_fx/<id>/, midi_fx/<id>/, inputs/<id>/, tools/<id>/
 ```
 
 Device: `ssh ableton@move.local`. Stock firmware preserved at `/opt/move/MoveOriginal`.

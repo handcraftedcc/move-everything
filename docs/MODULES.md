@@ -18,6 +18,19 @@ src/modules/your-module/
     <key>.txt
 ```
 
+Input modules (`"component_type": "input_module"`) live under
+`src/modules/inputs/<module-id>/` and install to
+`modules/inputs/<module-id>/`. This keeps pre-native input modules grouped
+separately from the regular host menu modules while preserving the same
+`module.json` package format.
+
+Input modules that transform pads in realtime ship a native `dsp.so` exporting
+`schwung_input_module_init_v1` from `src/host/input_module_api_v1.h`. The host
+passes cable-0 physical pad packets to `process_midi`; modules return whether
+the native event should be blocked plus bounded cable-2 MIDI output packets.
+If a selected input module has no `dsp.so` or fails to load, Schwung falls back
+to native passthrough for that track.
+
 ## module.json
 
 ```json
@@ -81,7 +94,48 @@ for keys anywhere in `module.json`).
 | `default_forward_channel` | Default Forward Channel for shadow slots loading this module. `-2` = passthrough (preserve original MIDI channel, required for MPE), `1`–`16` = remap to a specific channel. |
 | `button_passthrough` | Array of CC numbers the module wants Move to keep handling (e.g. `[85]` to let Play reach Move while the module is active). |
 | `suspend_keeps_js` | Tool/overtake modules: pressing Back suspends the UI but the DSP keeps ticking; full exit requires Shift+Back. Useful for sequencers that should keep playing while you browse Move. |
-| `component_type` | Module category: `sound_generator`, `audio_fx`, `midi_fx`, `utility`, `system`, `featured`, `overtake`, or `tool` |
+| `component_type` | Module category: `sound_generator`, `audio_fx`, `midi_fx`, `input_module`, `utility`, `system`, `featured`, `overtake`, or `tool` |
+
+### Input Module API
+
+Input modules use a dedicated C API because `plugin_api_v2_t.on_midi` cannot
+report whether the original hardware event should be blocked. The v1 input API
+defines:
+
+```c
+input_module_api_v1_t* schwung_input_module_init_v1(const host_input_api_v1_t *host);
+```
+
+The module contract is:
+
+- `create_instance(module_dir, json_defaults)` creates per-track state.
+- `set_param` and `get_param` mirror the Shadow UI hierarchy params.
+- `process_midi` receives one physical USB-MIDI packet plus context and returns
+  `handled`, `output_count`, and up to `INPUT_MODULE_MAX_OUTPUT_PACKETS`.
+- The context includes the active track and its current `uiOctaveIndex`.
+  Schwung initializes this from the active set's `Song.abl` and observes the
+  native Up/Down octave buttons without blocking them.
+- The context also includes the active set root note, scale name, and track
+  colors when they can be parsed from `Song.abl`; unknown values are reported
+  explicitly. Root/scale and track colors are seeded from `Song.abl` on
+  set/scene load. Native screen-reader D-Bus text is used as the fast live
+  root/scale hint while browsing the Move key/scale menus (`of 12` root items,
+  `of 35` scale items). While the active song path is known, Schwung also
+  polls `Song.abl` mtime every few seconds and reads only the small top-level
+  header before `tracks` as the slower set-file authority/fallback. Sentry
+  breadcrumbs are not used for live input-module key/scale updates.
+- Outputs should use cable 2 for generated track MIDI. Invalid packets are
+  dropped by the host.
+- Modules may opt into pad-only LED ownership with
+  `"input": { "led_mode": "replace_pads" }` or a persisted `led_mode` param.
+  In replace mode Schwung snapshots/restores pad notes 68-99 through
+  `shadow_led_queue.c`, blocks native pad LED packets only while note mode is
+  active, and leaves steps, tracks, transport, buttons, and knob LEDs native.
+  Use the host input callbacks `set_pad_led`, `get_pad_led`, and
+  `get_track_color`; input modules should not inspect LED cache internals.
+  `get_track_color` returns the set file's top-level `tracks[].color` value.
+- `on_all_notes_off` lets the host request cleanup before track/module/mode
+  changes; the host also tracks generated notes and sends panic note-offs.
 
 > **Where these are read.** `src/host/module_manager.c` (used by the
 > standalone host runtime) currently parses only `claims_master_knob`,

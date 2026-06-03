@@ -135,6 +135,7 @@ build/
     midi_fx/chord/           # MIDI FX: Chord generator
     midi_fx/arp/             # MIDI FX: Arpeggiator
     midi_fx/velocity_scale/  # MIDI FX: Velocity range mapping
+    inputs/true-chromatic-input/ # Input module: pre-native chromatic pads
     controller/              # MIDI controller (overtake)
     store/                   # Module Store (system)
     tools/file-browser/      # File browser tool (UI only)

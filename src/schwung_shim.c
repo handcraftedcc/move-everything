@@ -60,6 +60,8 @@
 #include "host/shadow_state.h"
 #include "host/shadow_midi.h"
 #include "host/shadow_shm_util.h"
+#include "host/shadow_input_modules.h"
+#include "host/move_mode_watcher.h"
 
 /* Debug flags - set to 1 to enable various debug logging */
 #define SHADOW_TIMING_LOG 0      /* ioctl/DSP timing logs to /tmp */
@@ -3443,6 +3445,45 @@ static int shim_handle_param_special(uint8_t req_type, uint32_t req_id) {
         return 1;
     }
 
+    /* input_module:<command> — track-scoped pre-native input runtime. */
+    if (strncmp(key, "input_module:", 13) == 0) {
+        const char *param_key = key + 13;
+        uint8_t slot = shadow_param->slot;
+        if (req_type == 1) {
+            if (strcmp(param_key, "module") == 0 || strcmp(param_key, "module_id") == 0) {
+                shadow_input_set_track_module(slot, shadow_param->value);
+                shadow_param->error = 0;
+                shadow_param->result_len = 0;
+            } else if (strcmp(param_key, "state_dir") == 0) {
+                shadow_input_load_state_dir(shadow_param->value);
+                shadow_param->error = 0;
+                shadow_param->result_len = 0;
+            } else if (strncmp(param_key, "param:", 6) == 0) {
+                shadow_input_set_track_param(slot, param_key + 6, shadow_param->value);
+                shadow_param->error = 0;
+                shadow_param->result_len = 0;
+            } else {
+                shadow_param->error = 15;
+                shadow_param->result_len = -1;
+            }
+        } else if (req_type == 2) {
+            const char *get_key = param_key;
+            if (strncmp(param_key, "param:", 6) == 0) get_key = param_key + 6;
+            int len = shadow_input_get_track_param(slot, get_key, shadow_param->value,
+                                                   SHADOW_PARAM_VALUE_LEN);
+            if (len >= 0) {
+                shadow_param->error = 0;
+                shadow_param->result_len = len;
+            } else {
+                shadow_param->error = 16;
+                shadow_param->result_len = -1;
+            }
+        }
+        shadow_param->response_ready = 1;
+        shadow_param->response_id = shadow_param->request_id;
+        return 1;
+    }
+
     /* jack:display — enable/disable JACK display override */
     if (strcmp(key, "jack:display") == 0) {
         if (req_type == 1 && g_jack_shm) {  /* SET */
@@ -3884,6 +3925,17 @@ static void shim_init_subsystems(void)
         };
         midi_routing_init(&midi_host);
     }
+    /* Initialize input-module runtime. Module loading happens only on
+     * explicit state/selection changes; the pad path only calls process_midi. */
+    {
+        shadow_input_host_t input_host = {
+            .log = shadow_log,
+            .emit_midi = shadow_chain_midi_inject,
+            .get_bpm = shim_get_bpm,
+            .shadow_control_ptr = &shadow_control,
+        };
+        shadow_input_modules_init(&input_host);
+    }
     /* Start Link Audio monitor — it will launch the subscriber
      * once link_audio_routing_enabled is set from config */
     if (link_audio.enabled) {
@@ -3895,6 +3947,28 @@ static void shim_init_subsystems(void)
      * inside shim_pre_transfer via overtake_ext_drain_into_shadow().
      * No worker thread — see the comment block on overtake_midi_send_external. */
     shadow_inprocess_load_chain();
+    {
+        char input_state_dir[512];
+        snprintf(input_state_dir, sizeof(input_state_dir), "%s", SLOT_STATE_DIR);
+        FILE *asf = fopen(ACTIVE_SET_PATH, "r");
+        if (asf) {
+            char uuid[128] = "";
+            if (fgets(uuid, sizeof(uuid), asf)) {
+                size_t uuid_len = strlen(uuid);
+                if (uuid_len > 0) {
+                    char *end = uuid + uuid_len - 1;
+                    while (end >= uuid && (*end == '\n' || *end == '\r' || *end == ' ')) *end-- = '\0';
+                }
+                if (uuid[0]) {
+                    char candidate[512];
+                    snprintf(candidate, sizeof(candidate), "%s/%s", SET_STATE_DIR, uuid);
+                    snprintf(input_state_dir, sizeof(input_state_dir), "%s", candidate);
+                }
+            }
+            fclose(asf);
+        }
+        shadow_input_load_state_dir(input_state_dir);
+    }
     /* Initialize D-Bus subsystem with callbacks to shim functions */
     {
         dbus_host_t dbus_host = {
@@ -3903,6 +3977,7 @@ static void shim_init_subsystems(void)
             .apply_mute = shadow_apply_mute,
             .ui_state_update_slot = shadow_ui_state_update_slot,
             .native_sampler_update = native_sampler_update_from_dbus_text,
+            .input_key_scale_update_from_text = shadow_input_update_key_scale_from_text,
             .chain_slots = shadow_chain_slots,
             .shadow_control_ptr = &shadow_control,
             .display_mode = &shadow_display_mode,
@@ -3915,6 +3990,14 @@ static void shim_init_subsystems(void)
         dbus_init(&dbus_host);
     }
     shadow_dbus_start();  /* Start D-Bus monitoring for volume sync */
+    {
+        move_mode_watcher_host_t watcher_host = {
+            .log = shadow_log,
+            .shadow_control_ptr = &shadow_control,
+        };
+        move_mode_watcher_init(&watcher_host);
+        move_mode_watcher_start();
+    }
     shadow_read_initial_volume();  /* Read initial master volume from settings */
     shadow_load_state();  /* Load saved slot volumes */
 
@@ -5243,11 +5326,13 @@ pre_done:
      * held — regardless of whether the volume knob is also touched. */
     {
         static int step2_lit = 0;
+        static int step9_lit = 0;
         static int step13_lit = 0;
 
         int want_shiftvol = SHIFT_VOL_ACTIVE() && shadow_shift_held && shadow_volume_knob_touched;
         int want_longpress = LONG_PRESS_ACTIVE() && shadow_shift_held && !shadow_volume_knob_touched;
         int want_step2 = want_shiftvol || want_longpress;
+        int want_step9 = want_shiftvol;
         int want_step13 = want_shiftvol || want_longpress;
 
         if (want_step2 && !step2_lit) {
@@ -5256,6 +5341,14 @@ pre_done:
         } else if (!want_step2 && step2_lit) {
             shadow_queue_led(0x0B, 0xB0, 17, 0);
             step2_lit = 0;
+        }
+
+        if (want_step9 && !step9_lit) {
+            shadow_queue_led(0x0B, 0xB0, 24, 118);  /* Step 9 icon = LightGrey (Input Modules) */
+            step9_lit = 1;
+        } else if (!want_step9 && step9_lit) {
+            shadow_queue_led(0x0B, 0xB0, 24, 0);
+            step9_lit = 0;
         }
 
         if (want_step13 && !step13_lit) {
@@ -5872,6 +5965,33 @@ static void shim_post_transfer(void *ctx, uint8_t *shadow, const uint8_t *hw, in
         memcpy(sh_midi, hw_midi, MIDI_BUFFER_SIZE);
     }
 
+    /* Input modules are track-scoped pre-native pad transforms. They run
+     * after the base shadow copy so blocking only touches the shadow mailbox
+     * that Move consumes, never the hardware buffer. */
+    if (shadow_control) {
+        shadow_input_tick_context();
+        for (int j = 0; j < MIDI_BUFFER_SIZE; j += 4) {
+            uint8_t cin = hw_midi[j] & 0x0F;
+            uint8_t cable = (hw_midi[j] >> 4) & 0x0F;
+            uint8_t status = hw_midi[j + 1];
+            uint8_t type = status & 0xF0;
+            uint8_t d1 = hw_midi[j + 2];
+            if (cable == 0x00 && cin == 0x0B && type == 0xB0) {
+                shadow_input_process_control_event(&hw_midi[j]);
+            }
+            if (cable == 0x00 &&
+                (cin == 0x09 || cin == 0x08) &&
+                (type == 0x90 || type == 0x80) &&
+                d1 >= 68 && d1 <= 99 &&
+                shadow_input_process_pad_event(&hw_midi[j])) {
+                sh_midi[j] = 0;
+                sh_midi[j + 1] = 0;
+                sh_midi[j + 2] = 0;
+                sh_midi[j + 3] = 0;
+            }
+        }
+    }
+
     /* Convert BLOCK-channel cable-2 note-ons to note-offs in shadow so Move
      * ignores them.  Must run AFTER the sh_midi loop (which overwrites shadow
      * from hw_midi) and only touches shadow — never hardware_mmap_addr. */
@@ -6484,6 +6604,23 @@ static void shim_post_transfer(void *ctx, uint8_t *shadow, const uint8_t *hw, in
                     if (SHIFT_VOL_ACTIVE() && shadow_shift_held && shadow_volume_knob_touched && shadow_control && shadow_ui_enabled) {
                         shadow_block_plain_volume_hide_until_release = 1;
                         shadow_control->ui_flags |= SHADOW_UI_FLAG_JUMP_TO_SETTINGS;
+                        /* Always ensure display shows shadow UI */
+                        shadow_display_mode = 1;
+                        shadow_control->display_mode = 1;
+                        launch_shadow_ui();  /* No-op if already running */
+                        /* Block Step note from reaching Move */
+                        uint8_t *sh = shadow + MIDI_IN_OFFSET;
+                        sh[j] = 0; sh[j+1] = 0; sh[j+2] = 0; sh[j+3] = 0;
+                        src[j] = 0; src[j+1] = 0; src[j+2] = 0; src[j+3] = 0;
+                    }
+                }
+
+                /* Shift + Volume + Step 9 (note 24) = jump to Input Module menu */
+                if (d1 == 24 && type == 0x90 && d2 > 0) {
+                    if (SHIFT_VOL_ACTIVE() && shadow_shift_held && shadow_volume_knob_touched && shadow_control && shadow_ui_enabled) {
+                        shadow_block_plain_volume_hide_until_release = 1;
+                        shadow_control->ui_slot = shadow_control->selected_slot;
+                        shadow_control->ui_flags |= SHADOW_UI_FLAG_JUMP_TO_INPUT_MODULES;
                         /* Always ensure display shows shadow UI */
                         shadow_display_mode = 1;
                         shadow_control->display_mode = 1;

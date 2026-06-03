@@ -239,7 +239,8 @@ if needs_rebuild build/schwung-shim.so \
     src/host/shadow_chain_mgmt.c src/host/shadow_link_audio.c src/host/shadow_process.c \
     src/host/shadow_resample.c src/host/shadow_overlay.c src/host/shadow_pin_scanner.c \
     src/host/shadow_led_queue.c src/host/shadow_state.c \
-    src/host/shadow_midi.c src/host/unified_log.c src/host/shim_worker.c \
+    src/host/shadow_midi.c src/host/shadow_input_modules.c src/host/move_mode_watcher.c \
+    src/host/unified_log.c src/host/shim_worker.c \
     src/host/shadow_shm_util.c src/host/schwung_trace.c src/host/shadow_test_stream.c src/host/shadow_test_stream.h \
     $SHIM_TTS_SRC \
     src/host/shadow_constants.h src/host/shadow_midi_inject_writer.h src/host/shadow_midi.h src/host/shadow_sampler.h \
@@ -248,7 +249,8 @@ if needs_rebuild build/schwung-shim.so \
     src/host/shadow_chain_types.h src/host/shadow_link_audio.h src/host/shadow_process.h \
     src/host/shadow_resample.h src/host/shadow_overlay.h src/host/shadow_pin_scanner.h \
     src/host/shadow_led_queue.h src/host/shadow_state.h \
-    src/host/plugin_api_v1.h src/host/unified_log.h src/host/tts_engine.h \
+    src/host/shadow_input_modules.h src/host/move_mode_watcher.h \
+    src/host/plugin_api_v1.h src/host/input_module_api_v1.h src/host/unified_log.h src/host/tts_engine.h \
     src/host/schwung_trace.h \
     src/host/link_audio.h src/host/shadow_shm_util.h; then
     echo "Building shim..."
@@ -269,6 +271,8 @@ if needs_rebuild build/schwung-shim.so \
         src/host/shadow_led_queue.c \
         src/host/shadow_state.c \
         src/host/shadow_midi.c \
+        src/host/shadow_input_modules.c \
+        src/host/move_mode_watcher.c \
         src/host/unified_log.c \
         src/host/shim_worker.c \
         src/host/shadow_shm_util.c \
@@ -552,6 +556,19 @@ fi
 
 echo "Building Sound Generator plugins..."
 
+# Build True Chromatic input module
+if needs_rebuild build/modules/inputs/true-chromatic-input/dsp.so \
+    src/modules/inputs/true-chromatic-input/dsp/input_plugin.c src/host/input_module_api_v1.h; then
+    echo "Building true-chromatic input module..."
+    mkdir -p build/modules/inputs/true-chromatic-input
+    "${CROSS_PREFIX}gcc" -g -O3 -shared -fPIC \
+        src/modules/inputs/true-chromatic-input/dsp/input_plugin.c \
+        -o build/modules/inputs/true-chromatic-input/dsp.so \
+        -Isrc
+else
+    echo "Skipping true-chromatic input module (up to date)"
+fi
+
 # Build Line In sound generator
 if needs_rebuild build/modules/sound_generators/linein/dsp.so \
     src/modules/sound_generators/linein/linein.c src/host/plugin_api_v1.h; then
@@ -747,6 +764,8 @@ rm -rf \
     ./build/modules/tools/config-test \
     ./build/modules/tools/splash-test \
     ./build/modules/store \
+    ./build/modules/input-native \
+    ./build/modules/input-param-lab \
     2>/dev/null || true
 
 # Make shell scripts in modules executable

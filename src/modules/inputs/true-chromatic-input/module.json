@@ -1,0 +1,27 @@
+{
+  "id": "true-chromatic-input",
+  "name": "True Chromatic",
+  "version": "1.0.0",
+  "api_version": 2,
+  "component_type": "input_module",
+  "abbrev": "CHR",
+  "description": "Maps Move pads to a true chromatic cable-2 note layout.",
+  "input": {
+    "led_mode": "replace_pads",
+    "emit_default_channel": "active_track"
+  },
+  "ui_hierarchy": {
+    "levels": {
+      "root": {
+        "name": "True Chromatic",
+        "params": [
+          { "key": "root_note", "name": "Root", "type": "note", "min_note": 0, "max_note": 127, "default": 48 },
+          { "key": "velocity", "name": "Velocity", "type": "enum", "options": ["Pad", "Fixed 100"], "default": "Pad" },
+          { "key": "led_mode", "name": "LED Mode", "type": "enum", "options": ["Native", "Replace Pads"], "values": ["native", "replace_pads"], "default": "replace_pads" }
+        ],
+        "knobs": ["root_note", "velocity", "led_mode"]
+      }
+    }
+  },
+  "dsp": "dsp.so"
+}

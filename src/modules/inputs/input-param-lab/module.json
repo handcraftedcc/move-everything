@@ -1,0 +1,59 @@
+{
+  "id": "input-param-lab",
+  "name": "Input Param Lab",
+  "version": "1.0.0",
+  "api_version": 2,
+  "component_type": "input_module",
+  "abbrev": "LAB",
+  "description": "Development input module metadata for exercising Shadow UI parameter editing.",
+  "input": {
+    "led_mode": "native",
+    "emit_default_channel": "active_track"
+  },
+  "ui_hierarchy": {
+    "levels": {
+      "root": {
+        "name": "Input Lab",
+        "params": [
+          { "key": "enabled", "name": "Enabled", "type": "bool", "default": true },
+          { "key": "layout", "name": "Layout", "type": "enum", "options": ["Chromatic", "Scale", "Drum"], "default": "Chromatic" },
+          { "key": "amount", "name": "Amount", "type": "float", "min": 0, "max": 1, "step": 0.01, "default": 0.5 },
+          { "key": "steps", "name": "Steps", "type": "int", "min": 1, "max": 16, "step": 1, "default": 4 },
+          { "key": "show_conditional", "name": "Show Conditional", "type": "bool", "default": false },
+          { "key": "conditional_amount", "name": "Cond Amount", "type": "float", "min": 0, "max": 1, "step": 0.01, "default": 0.25, "visible_if": { "param": "show_conditional", "truthy": true } },
+          { "level": "advanced", "label": "Advanced" },
+          { "level": "conditional", "label": "Conditional" },
+          { "level": "media", "label": "Media" }
+        ],
+        "knobs": ["enabled", "layout", "amount", "steps", "show_conditional", "conditional_amount"]
+      },
+      "advanced": {
+        "name": "Advanced",
+        "params": [
+          { "key": "root_note", "name": "Root", "type": "note", "min_note": 0, "max_note": 127, "default": 48 },
+          { "key": "rate", "name": "Rate", "type": "rate", "default": "1/8" },
+          { "key": "swing", "name": "Swing", "type": "float", "min": 0, "max": 1, "step": 0.01, "default": 0 }
+        ],
+        "knobs": ["root_note", "rate", "swing"]
+      },
+      "conditional": {
+        "name": "Conditional",
+        "visible_if": { "param": "show_conditional", "truthy": true },
+        "params": [
+          { "key": "conditional_mode", "name": "Mode", "type": "enum", "options": ["Soft", "Hard"], "default": "Soft" },
+          { "key": "conditional_steps", "name": "Steps", "type": "int", "min": 1, "max": 8, "step": 1, "default": 2 }
+        ],
+        "knobs": ["conditional_mode", "conditional_steps"]
+      },
+      "media": {
+        "name": "Media",
+        "params": [
+          { "key": "label", "name": "Label", "type": "string", "default": "Lab" },
+          { "key": "sample_path", "name": "Sample", "type": "filepath", "default": "" },
+          { "key": "shape", "name": "Shape", "type": "canvas", "default": "0" }
+        ],
+        "knobs": ["label", "sample_path"]
+      }
+    }
+  }
+}

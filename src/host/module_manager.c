@@ -433,6 +433,12 @@ int mm_scan_modules(module_manager_t *mm, const char *modules_dir) {
     snprintf(subdir, sizeof(subdir), "%s/midi_fx", modules_dir);
     scan_directory(mm, subdir);
 
+    snprintf(subdir, sizeof(subdir), "%s/inputs", modules_dir);
+    scan_directory(mm, subdir);
+
+    snprintf(subdir, sizeof(subdir), "%s/input_modules", modules_dir);
+    scan_directory(mm, subdir);
+
     snprintf(subdir, sizeof(subdir), "%s/utilities", modules_dir);
     scan_directory(mm, subdir);
 

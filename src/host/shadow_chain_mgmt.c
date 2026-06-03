@@ -2304,7 +2304,8 @@ void shadow_inprocess_handle_param_request(void) {
         const char *key = shadow_param->key;
         if (strncmp(key, "jack:", 5) == 0 ||
             strcmp(key, "suspend_overtake") == 0 ||
-            strcmp(key, "passthrough") == 0) {
+            strcmp(key, "passthrough") == 0 ||
+            strncmp(key, "input_module:", 13) == 0) {
             if (host.handle_param_special(req_type, req_id)) {
                 shadow_param_publish_response(req_id);
                 return;
