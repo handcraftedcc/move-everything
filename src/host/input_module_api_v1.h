@@ -10,7 +10,7 @@
 
 #include <stdint.h>
 
-#define INPUT_MODULE_API_VERSION 1
+#define INPUT_MODULE_API_VERSION 2
 #define INPUT_MODULE_MAX_OUTPUT_PACKETS 16
 
 typedef enum input_event_type_t {
@@ -58,6 +58,15 @@ typedef struct host_input_api_v1 {
     int (*emit_midi)(void *ctx,
                      const input_usb_midi_packet_t *packets,
                      int count);
+
+    int (*schedule_midi)(void *ctx,
+                         const input_usb_midi_packet_t *packets,
+                         int count,
+                         uint32_t delay_us);
+
+    int (*cancel_scheduled_midi)(void *ctx,
+                                 int note,
+                                 int channel);
 
     int (*set_pad_led)(void *ctx,
                        int pad_index,
@@ -109,6 +118,9 @@ typedef struct input_module_api_v1 {
 
     void (*on_all_notes_off)(void *instance,
                              const input_context_t *ctx);
+
+    void (*on_tick)(void *instance,
+                    const input_context_t *ctx);
 } input_module_api_v1_t;
 
 typedef input_module_api_v1_t* (*schwung_input_module_init_v1_fn)(const host_input_api_v1_t *host);

@@ -76,6 +76,7 @@ Key sources: `src/schwung_host.c` (host runtime), `src/schwung_shim.c` (LD_PRELO
 
 Built-in modules: `chain`, `file-browser`, `song-mode`, `wav-player`.
 Source-only (not shipped): `store` (on-device store retired — see Module Install/Update below).
+Built-in input modules: `true-chromatic-input`, `move-ish-input`, `drums-input`.
 Source-only (not in release tarball): `controller` (superseded by catalog `control`), `tools/{ui,seq,config,splash}-test`, `text-test`.
 
 ### JS Module Lifecycle

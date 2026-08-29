@@ -10,6 +10,7 @@ typedef struct shadow_input_host_t {
     void (*log)(const char *msg);
     int (*emit_midi)(const uint8_t *msg, int len);
     float (*get_bpm)(void);
+    int (*get_transport_playing)(void);
     shadow_control_t **shadow_control_ptr;
 } shadow_input_host_t;
 

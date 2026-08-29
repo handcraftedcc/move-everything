@@ -25,6 +25,7 @@
 #define INPUT_PARAM_VALUE_LEN 128
 #define INPUT_MODULE_DIR_LEN 256
 #define INPUT_LED_MODE_LEN 24
+#define INPUT_SCHEDULED_EVENTS 128
 
 #define MOVE_MODE_NOTE 2
 #define MOVE_PAD_NOTE_FIRST 68
@@ -67,6 +68,13 @@ typedef struct input_track_runtime_t {
     uint8_t generated_notes[16][128];
 } input_track_runtime_t;
 
+typedef struct input_scheduled_event_t {
+    int active;
+    int track;
+    uint64_t due_us;
+    input_usb_midi_packet_t packet;
+} input_scheduled_event_t;
+
 typedef struct move_key_scale_state_t {
     int root_midi_class;
     char root_name[8];
@@ -85,6 +93,7 @@ typedef struct sentry_watch_file_t {
 static shadow_input_host_t g_host;
 static input_track_runtime_t g_tracks[INPUT_TRACK_COUNT];
 static host_input_api_v1_t g_module_host_api;
+static input_scheduled_event_t g_scheduled[INPUT_SCHEDULED_EVENTS];
 static pthread_t g_sentry_thread;
 static volatile int g_sentry_running = 0;
 static uint32_t g_mode_generation = 0;
@@ -123,6 +132,13 @@ static int g_track_octave_index[INPUT_TRACK_COUNT] = {
 static int g_track_color[INPUT_TRACK_COUNT] = { -1, -1, -1, -1 };
 
 static void input_song_file_poll(void);
+
+static uint64_t monotonic_us(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000000ULL + (uint64_t)(ts.tv_nsec / 1000ULL);
+}
 
 static void input_log(const char *msg)
 {
@@ -174,7 +190,7 @@ static void fill_context(input_context_t *ctx)
     ctx->octave_index = current_octave_index();
     ctx->root_name = g_key_scale.root_name;
     ctx->scale_name = g_key_scale.scale_name;
-    ctx->playing = 0;
+    ctx->playing = g_host.get_transport_playing ? g_host.get_transport_playing() : 0;
     ctx->bpm = g_host.get_bpm ? g_host.get_bpm() : 120.0;
     ctx->mode_generation = g_mode_generation;
     ctx->track_generation = g_track_generation;
@@ -214,7 +230,7 @@ static const char *input_get_scale_name(void *ctx)
 static int input_get_transport_playing(void *ctx)
 {
     (void)ctx;
-    return 0;
+    return g_host.get_transport_playing ? g_host.get_transport_playing() : 0;
 }
 
 static double input_get_transport_bpm(void *ctx)
@@ -319,6 +335,103 @@ static int input_emit_midi(void *ctx,
     return emit_validated(track, packets, count);
 }
 
+static void clear_scheduled_track(int track_num)
+{
+    for (int i = 0; i < INPUT_SCHEDULED_EVENTS; i++) {
+        if (g_scheduled[i].active && g_scheduled[i].track == track_num) {
+            g_scheduled[i].active = 0;
+        }
+    }
+}
+
+static int clear_scheduled_track_note(int track_num, int note, int channel)
+{
+    int cleared = 0;
+    for (int i = 0; i < INPUT_SCHEDULED_EVENTS; i++) {
+        if (!g_scheduled[i].active || g_scheduled[i].track != track_num) continue;
+        const input_usb_midi_packet_t *p = &g_scheduled[i].packet;
+        if (note >= 0 && p->data1 != (uint8_t)note) continue;
+        if (channel >= 0 && (p->status & 0x0F) != (uint8_t)channel) continue;
+        g_scheduled[i].active = 0;
+        cleared++;
+    }
+    return cleared;
+}
+
+static int input_schedule_midi(void *ctx,
+                               const input_usb_midi_packet_t *packets,
+                               int count,
+                               uint32_t delay_us)
+{
+    input_track_runtime_t *track = (input_track_runtime_t *)ctx;
+    if (!track || !packets || count <= 0) return 0;
+    if (count > INPUT_MODULE_MAX_OUTPUT_PACKETS) count = INPUT_MODULE_MAX_OUTPUT_PACKETS;
+    int track_num = (int)(track - g_tracks);
+    if (track_num < 0 || track_num >= INPUT_TRACK_COUNT) return 0;
+
+    uint64_t due = monotonic_us() + (uint64_t)delay_us;
+    int queued = 0;
+    for (int i = 0; i < count; i++) {
+        if (!validate_packet(&packets[i])) {
+            input_log("input module: dropped invalid scheduled packet");
+            continue;
+        }
+        int slot = -1;
+        for (int j = 0; j < INPUT_SCHEDULED_EVENTS; j++) {
+            if (!g_scheduled[j].active) {
+                slot = j;
+                break;
+            }
+        }
+        if (slot < 0) {
+            input_log("input module: scheduled MIDI queue full");
+            break;
+        }
+        g_scheduled[slot].active = 1;
+        g_scheduled[slot].track = track_num;
+        g_scheduled[slot].due_us = due;
+        g_scheduled[slot].packet = packets[i];
+        queued++;
+    }
+    return queued;
+}
+
+static int input_cancel_scheduled_midi(void *ctx, int note, int channel)
+{
+    input_track_runtime_t *track = (input_track_runtime_t *)ctx;
+    if (!track) return 0;
+    int track_num = (int)(track - g_tracks);
+    if (track_num < 0 || track_num >= INPUT_TRACK_COUNT) return 0;
+    int n = (note >= 0 && note <= 127) ? note : -1;
+    int ch = (channel >= 0 && channel < 16) ? channel : -1;
+    return clear_scheduled_track_note(track_num, n, ch);
+}
+
+static void input_drain_scheduled(void)
+{
+    uint64_t now = monotonic_us();
+    int drained = 0;
+    for (int i = 0; i < INPUT_SCHEDULED_EVENTS && drained < 8; i++) {
+        if (!g_scheduled[i].active || g_scheduled[i].due_us > now) continue;
+        int track_num = g_scheduled[i].track;
+        input_usb_midi_packet_t packet = g_scheduled[i].packet;
+        g_scheduled[i].active = 0;
+        if (track_num >= 0 && track_num < INPUT_TRACK_COUNT) {
+            emit_validated(&g_tracks[track_num], &packet, 1);
+            drained++;
+        }
+    }
+}
+
+static void input_tick_active_module(void)
+{
+    input_track_runtime_t *track = &g_tracks[active_track()];
+    if (!track->loaded || !track->api || !track->instance || !track->api->on_tick) return;
+    input_context_t ctx;
+    fill_context(&ctx);
+    track->api->on_tick(track->instance, &ctx);
+}
+
 static int track_wants_replace_pads(const input_track_runtime_t *track)
 {
     return track && track->loaded &&
@@ -346,9 +459,31 @@ static void input_update_led_ownership(void)
     }
 }
 
+static void input_set_track_led_mode(input_track_runtime_t *track, const char *value, int force_refresh)
+{
+    if (!track) return;
+    int was_active = (track == &g_tracks[active_track()]) && g_last_led_owner_active;
+    if (value && (strcmp(value, "replace_pads") == 0 || strcmp(value, "Replace Pads") == 0)) {
+        snprintf(track->led_mode, sizeof(track->led_mode), "replace_pads");
+    } else {
+        snprintf(track->led_mode, sizeof(track->led_mode), "native");
+    }
+    input_update_led_ownership();
+    if (force_refresh && track == &g_tracks[active_track()]) {
+        if (track_wants_replace_pads(track)) {
+            notify_context_changed(track);
+        } else if (was_active) {
+            led_queue_set_input_pad_owner(0);
+            g_last_led_owner_active = 0;
+        }
+    }
+}
+
 static void panic_track(input_track_runtime_t *track)
 {
     if (!track) return;
+    int track_num = (int)(track - g_tracks);
+    if (track_num >= 0 && track_num < INPUT_TRACK_COUNT) clear_scheduled_track(track_num);
     input_context_t ctx;
     fill_context(&ctx);
     if (track->api && track->instance && track->api->on_all_notes_off) {
@@ -468,11 +603,7 @@ static void apply_stored_params(input_track_runtime_t *track)
     if (!track || !track->api || !track->instance || !track->api->set_param) return;
     for (int i = 0; i < track->param_count; i++) {
         if (strcmp(track->params[i].key, "led_mode") == 0) {
-            if (strcmp(track->params[i].value, "replace_pads") == 0) {
-                snprintf(track->led_mode, sizeof(track->led_mode), "replace_pads");
-            } else {
-                snprintf(track->led_mode, sizeof(track->led_mode), "native");
-            }
+            input_set_track_led_mode(track, track->params[i].value, 0);
         }
         track->api->set_param(track->instance, track->params[i].key, track->params[i].value);
     }
@@ -586,12 +717,7 @@ int shadow_input_set_track_param(int track_index, const char *key, const char *v
     snprintf(track->params[slot].value, sizeof(track->params[slot].value), "%s", val);
 
     if (strcmp(key, "led_mode") == 0) {
-        if (strcmp(val, "replace_pads") == 0) {
-            snprintf(track->led_mode, sizeof(track->led_mode), "replace_pads");
-        } else {
-            snprintf(track->led_mode, sizeof(track->led_mode), "native");
-        }
-        input_update_led_ownership();
+        input_set_track_led_mode(track, val, 1);
     }
 
     if (track->api && track->instance && track->api->set_param) {
@@ -1817,6 +1943,8 @@ void shadow_input_tick_context(void)
         changed = 1;
     }
     input_update_led_ownership();
+    input_tick_active_module();
+    input_drain_scheduled();
     if (changed) notify_context_changed(&g_tracks[track]);
 }
 
@@ -1860,6 +1988,8 @@ void shadow_input_modules_init(const shadow_input_host_t *host)
     if (host) g_host = *host;
     memset(&g_module_host_api, 0, sizeof(g_module_host_api));
     g_module_host_api.emit_midi = input_emit_midi;
+    g_module_host_api.schedule_midi = input_schedule_midi;
+    g_module_host_api.cancel_scheduled_midi = input_cancel_scheduled_midi;
     g_module_host_api.set_pad_led = input_host_set_pad_led;
     g_module_host_api.get_pad_led = input_host_get_pad_led;
     g_module_host_api.get_track_color = input_host_get_track_color;

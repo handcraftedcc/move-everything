@@ -3343,6 +3343,10 @@ static float shim_get_bpm(void) {
     return sampler_get_bpm(NULL);
 }
 
+static int shim_get_transport_playing(void) {
+    return sampler_transport_playing ? 1 : 0;
+}
+
 /* =========================================================================
  * Web UI ring buffer: drain set requests from web server
  * ========================================================================= */
@@ -3932,6 +3936,7 @@ static void shim_init_subsystems(void)
             .log = shadow_log,
             .emit_midi = shadow_chain_midi_inject,
             .get_bpm = shim_get_bpm,
+            .get_transport_playing = shim_get_transport_playing,
             .shadow_control_ptr = &shadow_control,
         };
         shadow_input_modules_init(&input_host);
@@ -5980,8 +5985,8 @@ static void shim_post_transfer(void *ctx, uint8_t *shadow, const uint8_t *hw, in
                 shadow_input_process_control_event(&hw_midi[j]);
             }
             if (cable == 0x00 &&
-                (cin == 0x09 || cin == 0x08) &&
-                (type == 0x90 || type == 0x80) &&
+                (cin == 0x09 || cin == 0x08 || cin == 0x0A) &&
+                (type == 0x90 || type == 0x80 || type == 0xA0) &&
                 d1 >= 68 && d1 <= 99 &&
                 shadow_input_process_pad_event(&hw_midi[j])) {
                 sh_midi[j] = 0;

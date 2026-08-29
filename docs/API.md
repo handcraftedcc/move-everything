@@ -223,6 +223,8 @@ move_midi_inject_to_move([packet0, status, d1, d2])
 // set_pad_led, get_pad_led, and get_track_color. get_track_color is sourced
 // from Song.abl top-level tracks[].color. The host owns the LED snapshot/
 // restore flow; modules only request pad colors.
+// C input modules may also call schedule_midi to queue short delayed packet
+// bursts from the host input tick path, avoiding module-local worker threads.
 
 // Cable-2 (external USB) MIDI channel remap — overtake modules only.
 // Rewrites the channel byte of incoming external MIDI before Move's firmware

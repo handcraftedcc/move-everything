@@ -1,0 +1,35 @@
+{
+  "id": "move-ish-input",
+  "name": "Move-ish",
+  "version": "1.0.0",
+  "api_version": 2,
+  "component_type": "input_module",
+  "abbrev": "MOV",
+  "description": "Maps Move pads using native-style chromatic and in-key layouts with an adjustable pad-window offset.",
+  "input": {
+    "led_mode": "replace_pads",
+    "emit_default_channel": "active_track"
+  },
+  "ui_hierarchy": {
+    "levels": {
+      "root": {
+        "name": "Move-ish",
+        "params": [
+          {
+            "key": "layout",
+            "name": "Layout",
+            "type": "enum",
+            "options": ["Chromatic", "In-Key Octaves", "In-Key 4ths"],
+            "values": ["chromatic", "in_key_octaves", "in_key_4ths"],
+            "default": "Chromatic"
+          },
+          { "key": "offset", "name": "Offset", "type": "int", "min": -32, "max": 32, "step": 1, "default": 0 },
+          { "key": "velocity", "name": "Velocity", "type": "enum", "options": ["Pad", "Fixed 100"], "default": "Pad" },
+          { "key": "led_mode", "name": "LED Mode", "type": "enum", "options": ["Native", "Replace Pads"], "values": ["native", "replace_pads"], "default": "replace_pads" }
+        ],
+        "knobs": ["layout", "offset", "velocity", "led_mode"]
+      }
+    }
+  },
+  "dsp": "dsp.so"
+}

@@ -368,6 +368,17 @@ function defaultForMeta(meta) {
     return "";
 }
 
+function normalizeInputParamValue(meta, value) {
+    if (!meta || typeof meta !== "object") return value;
+    if (!Array.isArray(meta.values) || !Array.isArray(meta.options)) return value;
+    const raw = String(value);
+    const optionIndex = meta.options.indexOf(raw);
+    if (optionIndex >= 0 && optionIndex < meta.values.length) {
+        return meta.values[optionIndex];
+    }
+    return value;
+}
+
 function metadataChainParams(meta) {
     if (!meta || typeof meta !== "object") return [];
     if (Array.isArray(meta.chain_params)) return meta.chain_params;
@@ -470,19 +481,23 @@ export function getInputSlotParam(slot, fullKey) {
 export function setInputSlotParam(slot, fullKey, value) {
     const state = getTrackState(slot);
     const key = stripInputPrefix(fullKey);
+    const moduleId = state.module || "native";
+    const paramMeta = findInputParamMeta(moduleId, key);
+    const normalizedValue = normalizeInputParamValue(paramMeta, value);
     if (key === "module" || key === "module_id") {
         state.module = value ? String(value) : "native";
         state.params = {};
         setShimInputParam(slot, "input_module:module", state.module);
     } else if (key === "led_mode") {
-        state.led_mode = value ? String(value) : "native";
+        state.led_mode = normalizedValue ? String(normalizedValue) : "native";
+        setShimInputParam(slot, "input_module:param:" + key, state.led_mode);
     } else if (key === "ui_hierarchy" || key === "chain_params" ||
                key === "name" || key === "display_name" ||
                key === "abbrev" || key === "is_loading" ||
                key === "load_error" || key === "error") {
         return true;
     } else {
-        state.params[key] = String(value);
+        state.params[key] = String(normalizedValue);
         setShimInputParam(slot, "input_module:param:" + key, state.params[key]);
     }
     saveInputModuleState();

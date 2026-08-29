@@ -126,6 +126,10 @@ The module contract is:
   breadcrumbs are not used for live input-module key/scale updates.
 - Outputs should use cable 2 for generated track MIDI. Invalid packets are
   dropped by the host.
+- Modules can use `schedule_midi` to queue bounded cable-2 packets for later
+  emission from the input tick path. This is intended for short performance
+  gestures such as drum ratchets; scheduled packets are cleared on panic,
+  track changes, mode changes, and module unload.
 - Modules may opt into pad-only LED ownership with
   `"input": { "led_mode": "replace_pads" }` or a persisted `led_mode` param.
   In replace mode Schwung snapshots/restores pad notes 68-99 through

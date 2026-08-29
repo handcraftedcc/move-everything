@@ -1,0 +1,34 @@
+{
+  "id": "drums-input",
+  "name": "Drums",
+  "version": "1.0.0",
+  "api_version": 2,
+  "component_type": "input_module",
+  "abbrev": "DRM",
+  "description": "Drum pad layouts with 32-pad, velocity, and ratchet performance modes.",
+  "input": {
+    "led_mode": "replace_pads",
+    "emit_default_channel": "active_track"
+  },
+  "ui_hierarchy": {
+    "levels": {
+      "root": {
+        "name": "Drums",
+        "params": [
+          {
+            "key": "mode",
+            "name": "Mode",
+            "type": "enum",
+            "options": ["32 Drums", "16 Velocities", "16 Ratchets"],
+            "default": "32 Drums"
+          },
+          { "key": "base_note", "name": "Base", "type": "note", "min_note": 0, "max_note": 96, "default": 36 },
+          { "key": "velocity", "name": "Velocity", "type": "enum", "options": ["Pad", "Fixed 100"], "default": "Pad" },
+          { "key": "led_mode", "name": "LED Mode", "type": "enum", "options": ["Native", "Replace Pads"], "values": ["native", "replace_pads"], "default": "replace_pads" }
+        ],
+        "knobs": ["mode", "base_note", "velocity", "led_mode"]
+      }
+    }
+  },
+  "dsp": "dsp.so"
+}

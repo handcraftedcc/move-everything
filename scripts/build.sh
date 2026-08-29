@@ -569,6 +569,32 @@ else
     echo "Skipping true-chromatic input module (up to date)"
 fi
 
+# Build Move-ish input module
+if needs_rebuild build/modules/inputs/move-ish-input/dsp.so \
+    src/modules/inputs/move-ish-input/dsp/input_plugin.c src/host/input_module_api_v1.h; then
+    echo "Building move-ish input module..."
+    mkdir -p build/modules/inputs/move-ish-input
+    "${CROSS_PREFIX}gcc" -g -O3 -shared -fPIC \
+        src/modules/inputs/move-ish-input/dsp/input_plugin.c \
+        -o build/modules/inputs/move-ish-input/dsp.so \
+        -Isrc
+else
+    echo "Skipping move-ish input module (up to date)"
+fi
+
+# Build Drums input module
+if needs_rebuild build/modules/inputs/drums-input/dsp.so \
+    src/modules/inputs/drums-input/dsp/input_plugin.c src/host/input_module_api_v1.h; then
+    echo "Building drums input module..."
+    mkdir -p build/modules/inputs/drums-input
+    "${CROSS_PREFIX}gcc" -g -O3 -shared -fPIC \
+        src/modules/inputs/drums-input/dsp/input_plugin.c \
+        -o build/modules/inputs/drums-input/dsp.so \
+        -Isrc
+else
+    echo "Skipping drums input module (up to date)"
+fi
+
 # Build Line In sound generator
 if needs_rebuild build/modules/sound_generators/linein/dsp.so \
     src/modules/sound_generators/linein/linein.c src/host/plugin_api_v1.h; then
